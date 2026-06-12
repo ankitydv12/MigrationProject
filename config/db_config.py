@@ -11,6 +11,11 @@ import logging
 load_dotenv()
 
 
+logging.basicConfig(
+    level= logging.INFO ,
+    format="        Logger :%(name)s - %(asctime)s -%(levelname)s -%(message)s"
+)
+
 # Block 2 - Read Credentials from .env
 
 #loading mysql credentials 
@@ -31,20 +36,20 @@ postgres_database = os.getenv("POSTGRES_DATABASE")
 
 
 # Block 3 - Validate Credentials Exist
-            #pass
+REQUIRED_VARS = [
+    "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER",
+    "MYSQL_PASSWORD", "MYSQL_DATABASE",
+    "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER",
+    "POSTGRES_PASSWORD", "POSTGRES_DATABASE"
+]
 
-            
+missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 
-#Creating sqlalchemy connection
-def get_mysql_engine():
-    try:
-        mysql_database_url = f"mysql+mysqlconnector://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
-        engine = create_engine(mysql_database_url , echo = True)
-        print("Succesfully connected mysql using alchemy")
-        return engine
-    except Exception as e:
-        print(f"ERROR: {str(e)}")
-        return None
+if missing:
+    raise EnvironmentError(
+        f"Missing environment variables: {missing}. "
+        f"Check your .env file."
+    )
 
 
 #Vai alchemy
@@ -112,6 +117,7 @@ def test_all_connection():
     cursor = conn.cursor()
     cursor.execute("SELECT VERSION()")
     print(f"Mysql Version  {cursor.fetchone()[0]}")
+    conn.close()
 
     #Testing postgresql connection
     
@@ -119,6 +125,7 @@ def test_all_connection():
     cursor = conn.cursor()
     cursor.execute("SELECT VERSION()")
     print(f"Postgres Version - {cursor.fetchone()[0]}")
+    conn.close()
 
     #Testing mysql alchemy connection
 
@@ -137,5 +144,5 @@ def test_all_connection():
     print("All connections verified successfully")
 
 
-
-test_all_connection()
+if __name__ == "__main__":
+    test_all_connection()
