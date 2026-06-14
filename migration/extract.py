@@ -177,7 +177,7 @@ def get_migration_order():
     ]
 
     all_tables = get_all_table_names()
-    independent_tables = {t for t in all_tables if t not in ecommerce_ordered}
+    independent_tables = [t for t in all_tables if t not in ecommerce_ordered]
 
     logging.info(f"Ecommer Tables : {len(ecommerce_ordered)}")
     logging.info(f"Independe Tables  : {len(independent_tables)}")
