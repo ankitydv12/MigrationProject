@@ -1,0 +1,34 @@
+mysql_to_postgres_migration/
+│
+├── config/
+│   ├── __init__.py
+│   └── db_config.py
+│
+├── data_generation/
+│   ├── __init__.py
+│   └── generate_data.py
+│
+├── migration/
+│   ├── __init__.py
+│   ├── extractor.py
+│   ├── transformer.py
+│   └── loader.py
+│
+├── validation/
+│   ├── __init__.py
+│   └── validate.py
+│
+├── logs/
+│   └── migration.log
+│
+├── reports/
+│   └── validation_report.csv
+│
+├── utils/
+│   ├── __init__.py
+│   ├── logger.py
+│   └── helpers.py
+│
+├── main.py
+├── requirements.txt
+└── .env

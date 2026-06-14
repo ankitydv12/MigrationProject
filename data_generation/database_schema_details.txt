@@ -1,0 +1,329 @@
+============================================================
+Migration Project Database Schema (MySQL Version)
+============================================================
+Total Tables: 100
+Rows per Table: 10,000
+
+------------------------------------------------------------
+1. E-COMMERCE DOMAIN (20 Connected Tables)
+------------------------------------------------------------
+Table: countries
+  Columns: id: INT, name: VARCHAR(100), iso_code: VARCHAR(10), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: regions
+  Columns: id: INT, country_id: INT, name: VARCHAR(100), code: VARCHAR(10), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: addresses
+  Columns: id: INT, region_id: INT, street_address: VARCHAR(255), city: VARCHAR(100), postal_code: VARCHAR(20), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: customers
+  Columns: id: INT, address_id: INT, first_name: VARCHAR(100), last_name: VARCHAR(100), email: VARCHAR(150), phone: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: suppliers
+  Columns: id: INT, name: VARCHAR(150), contact_name: VARCHAR(100), email: VARCHAR(150), phone: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: products
+  Columns: id: INT, name: VARCHAR(150), sku: VARCHAR(50), description: TEXT, price: DECIMAL(10, 2), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: product_categories
+  Columns: id: INT, name: VARCHAR(100), description: TEXT, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: product_variants
+  Columns: id: INT, product_id: INT, category_id: INT, sku: VARCHAR(50), price_modifier: DECIMAL(10, 2), option_name: VARCHAR(50), option_value: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: inventory
+  Columns: id: INT, variant_id: INT, quantity: INT, warehouse_code: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: payment_methods
+  Columns: id: INT, name: VARCHAR(50), is_active: BOOLEAN, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: orders
+  Columns: id: INT, customer_id: INT, payment_method_id: INT, order_number: VARCHAR(50), total_amount: DECIMAL(10, 2), status: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: order_items
+  Columns: id: INT, order_id: INT, variant_id: INT, quantity: INT, unit_price: DECIMAL(10, 2), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: supplier_products
+  Columns: id: INT, supplier_id: INT, product_id: INT, wholesale_price: DECIMAL(10, 2), lead_time_days: INT, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: payments
+  Columns: id: INT, order_id: INT, payment_method_id: INT, transaction_reference: VARCHAR(100), amount: DECIMAL(10, 2), status: VARCHAR(50), created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: coupons
+  Columns: id: INT, code: VARCHAR(50), discount_type: VARCHAR(20), discount_value: DECIMAL(10, 2), expires_at: TIMESTAMP, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: coupon_usage
+  Columns: id: INT, coupon_id: INT, customer_id: INT, used_at: TIMESTAMP, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: shipment_tracking
+  Columns: id: INT, order_id: INT, tracking_number: VARCHAR(100), carrier: VARCHAR(50), status: VARCHAR(50), shipped_at: TIMESTAMP, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: reviews
+  Columns: id: INT, customer_id: INT, product_id: INT, rating: INT, review_text: TEXT, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: carts
+  Columns: id: INT, customer_id: INT, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+Table: cart_items
+  Columns: id: INT, cart_id: INT, variant_id: INT, quantity: INT, created_at: TIMESTAMP, updated_at: TIMESTAMP
+
+------------------------------------------------------------
+2. HUMAN RESOURCES (HR) DOMAIN (11 Tables)
+------------------------------------------------------------
+Table: employees
+  Columns: id: VARCHAR(36), first_name: VARCHAR(50), last_name: VARCHAR(50), email: VARCHAR(100), phone_number: VARCHAR(50), hire_date: DATE, status: VARCHAR(20), created_at: TIMESTAMP
+
+Table: departments
+  Columns: id: INT, dept_name: VARCHAR(100), code: VARCHAR(10), budget: DECIMAL(12, 2), manager_name: VARCHAR(100), created_at: TIMESTAMP
+
+Table: job_roles
+  Columns: id: INT, title: VARCHAR(100), description: TEXT, min_salary: DECIMAL(10, 2), max_salary: DECIMAL(10, 2), grade: VARCHAR(5), created_at: TIMESTAMP
+
+Table: payroll_records
+  Columns: id: INT, employee_ref: VARCHAR(50), pay_period: VARCHAR(20), gross_pay: DECIMAL(10, 2), deductions: DECIMAL(10, 2), net_pay: DECIMAL(10, 2), payment_date: DATE, created_at: TIMESTAMP
+
+Table: leave_requests
+  Columns: id: INT, employee_ref: VARCHAR(50), leave_type: VARCHAR(50), start_date: DATE, end_date: DATE, status: VARCHAR(20), approved_by: VARCHAR(100), created_at: TIMESTAMP
+
+Table: benefits_packages
+  Columns: id: INT, package_name: VARCHAR(100), provider: VARCHAR(100), monthly_premium: DECIMAL(8, 2), coverage_details: TEXT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: employee_skills
+  Columns: id: INT, employee_ref: VARCHAR(50), skill_name: VARCHAR(100), proficiency_level: VARCHAR(20), years_experience: INT, certified: BOOLEAN, created_at: TIMESTAMP
+
+Table: performance_reviews
+  Columns: id: INT, employee_ref: VARCHAR(50), reviewer_name: VARCHAR(100), review_date: DATE, rating: INT, achievements: TEXT, improvement_areas: TEXT, created_at: TIMESTAMP
+
+Table: timesheets
+  Columns: id: INT, employee_ref: VARCHAR(50), work_date: DATE, regular_hours: DECIMAL(4, 2), overtime_hours: DECIMAL(4, 2), description: TEXT, is_approved: BOOLEAN, created_at: TIMESTAMP
+
+Table: training_sessions
+  Columns: id: INT, topic: VARCHAR(150), trainer: VARCHAR(100), scheduled_at: TIMESTAMP, duration_hours: INT, max_participants: INT, created_at: TIMESTAMP
+
+Table: employment_contracts
+  Columns: id: INT, employee_ref: VARCHAR(50), contract_type: VARCHAR(50), start_date: DATE, end_date: DATE, salary_rate: DECIMAL(10, 2), terms: TEXT, created_at: TIMESTAMP
+
+------------------------------------------------------------
+3. FINANCE & ACCOUNTING DOMAIN (11 Tables)
+------------------------------------------------------------
+Table: gl_accounts
+  Columns: id: INT, account_code: VARCHAR(20), account_name: VARCHAR(100), account_type: VARCHAR(50), currency: VARCHAR(3), is_active: BOOLEAN, current_balance: DECIMAL(15, 2), created_at: TIMESTAMP
+
+Table: journal_entries
+  Columns: id: INT, entry_date: TIMESTAMP, description: TEXT, source_doc: VARCHAR(50), created_by: VARCHAR(100), total_amount: DECIMAL(12, 2), posted: BOOLEAN, created_at: TIMESTAMP
+
+Table: tax_records
+  Columns: id: INT, tax_period: VARCHAR(10), jurisdiction: VARCHAR(50), tax_type: VARCHAR(50), gross_amount: DECIMAL(12, 2), tax_rate: DECIMAL(5, 4), tax_amount: DECIMAL(12, 2), paid: BOOLEAN, created_at: TIMESTAMP
+
+Table: budget_allocations
+  Columns: id: INT, fiscal_year: INT, department_code: VARCHAR(20), allocated_amount: DECIMAL(12, 2), spent_amount: DECIMAL(12, 2), notes: TEXT, approved_by: VARCHAR(100), created_at: TIMESTAMP
+
+Table: invoices
+  Columns: id: VARCHAR(36), invoice_number: VARCHAR(50), customer_ref: VARCHAR(50), issue_date: DATE, due_date: DATE, subtotal: DECIMAL(10, 2), tax_amount: DECIMAL(10, 2), total_amount: DECIMAL(10, 2), status: VARCHAR(20), created_at: TIMESTAMP
+
+Table: expense_reports
+  Columns: id: INT, employee_ref: VARCHAR(50), purpose: VARCHAR(255), total_claimed: DECIMAL(10, 2), status: VARCHAR(20), approved_date: DATE, audited: BOOLEAN, created_at: TIMESTAMP
+
+Table: bank_transactions
+  Columns: id: INT, bank_account_no: VARCHAR(50), transaction_date: TIMESTAMP, amount: DECIMAL(12, 2), transaction_type: VARCHAR(10), description: VARCHAR(255), reference_no: VARCHAR(100), reconciled: BOOLEAN, created_at: TIMESTAMP
+
+Table: purchase_orders
+  Columns: id: INT, po_number: VARCHAR(50), vendor_ref: VARCHAR(50), order_date: DATE, expected_delivery: DATE, total_amount: DECIMAL(12, 2), status: VARCHAR(20), terms: TEXT, created_at: TIMESTAMP
+
+Table: depreciation_schedules
+  Columns: id: INT, asset_ref: VARCHAR(50), purchase_cost: DECIMAL(12, 2), salvage_value: DECIMAL(12, 2), useful_life_years: INT, depreciation_method: VARCHAR(50), accumulated_depreciation: DECIMAL(12, 2), created_at: TIMESTAMP
+
+Table: fiscal_periods
+  Columns: id: INT, period_name: VARCHAR(20), start_date: DATE, end_date: DATE, is_closed: BOOLEAN, closed_by: VARCHAR(100), created_at: TIMESTAMP
+
+Table: currency_rates
+  Columns: id: INT, from_currency: VARCHAR(3), to_currency: VARCHAR(3), exchange_rate: DECIMAL(10, 6), effective_date: DATE, source_name: VARCHAR(100), created_at: TIMESTAMP
+
+------------------------------------------------------------
+4. LOGISTICS DOMAIN (11 Tables)
+------------------------------------------------------------
+Table: warehouses
+  Columns: id: INT, code: VARCHAR(20), location_name: VARCHAR(150), address: VARCHAR(255), capacity_cubic_meters: DECIMAL(10, 2), manager_name: VARCHAR(100), is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: vehicles
+  Columns: id: INT, vin: VARCHAR(17), license_plate: VARCHAR(20), make: VARCHAR(50), model: VARCHAR(50), year: INT, fuel_type: VARCHAR(20), payload_capacity_lbs: INT, created_at: TIMESTAMP
+
+Table: delivery_routes
+  Columns: id: INT, route_code: VARCHAR(20), start_location: VARCHAR(150), end_location: VARCHAR(150), distance_km: DECIMAL(8, 2), estimated_duration_hours: DECIMAL(5, 2), active: BOOLEAN, created_at: TIMESTAMP
+
+Table: fuel_logs
+  Columns: id: INT, vehicle_ref: VARCHAR(50), log_date: TIMESTAMP, gallons: DECIMAL(6, 2), price_per_gallon: DECIMAL(4, 2), total_cost: DECIMAL(8, 2), odometer_reading: INT, created_at: TIMESTAMP
+
+Table: maintenance_records
+  Columns: id: INT, vehicle_ref: VARCHAR(50), maintenance_date: DATE, service_type: VARCHAR(100), description: TEXT, cost: DECIMAL(8, 2), vendor_name: VARCHAR(100), next_due_date: DATE, created_at: TIMESTAMP
+
+Table: shipping_containers
+  Columns: id: INT, container_no: VARCHAR(20), size_feet: INT, tare_weight_kg: INT, max_payload_kg: INT, owner_company: VARCHAR(100), status: VARCHAR(20), created_at: TIMESTAMP
+
+Table: freight_carriers
+  Columns: id: INT, carrier_name: VARCHAR(100), scac_code: VARCHAR(4), contact_email: VARCHAR(100), contact_phone: VARCHAR(50), rating: DECIMAL(3, 2), is_preferred: BOOLEAN, created_at: TIMESTAMP
+
+Table: port_records
+  Columns: id: INT, port_code: VARCHAR(10), port_name: VARCHAR(100), country: VARCHAR(100), terminal_count: INT, daily_vessel_capacity: INT, latitude: DECIMAL(9, 6), longitude: DECIMAL(9, 6), created_at: TIMESTAMP
+
+Table: customs_declarations
+  Columns: id: INT, declaration_ref: VARCHAR(50), shipper_name: VARCHAR(100), consignee_name: VARCHAR(100), declared_value_usd: DECIMAL(12, 2), duty_amount_usd: DECIMAL(10, 2), status: VARCHAR(20), clearance_date: DATE, created_at: TIMESTAMP
+
+Table: cargo_manifests
+  Columns: id: INT, manifest_no: VARCHAR(50), vessel_name: VARCHAR(100), voyage_number: VARCHAR(20), load_port_code: VARCHAR(10), discharge_port_code: VARCHAR(10), total_weight_tons: DECIMAL(10, 2), container_count: INT, created_at: TIMESTAMP
+
+Table: driver_logs
+  Columns: id: INT, driver_license: VARCHAR(30), driver_name: VARCHAR(100), log_date: DATE, on_duty_hours: DECIMAL(4, 2), driving_hours: DECIMAL(4, 2), sleeper_berth_hours: DECIMAL(4, 2), violation_occurred: BOOLEAN, created_at: TIMESTAMP
+
+------------------------------------------------------------
+5. CRM & MARKETING DOMAIN (11 Tables)
+------------------------------------------------------------
+Table: leads
+  Columns: id: INT, first_name: VARCHAR(50), last_name: VARCHAR(50), email: VARCHAR(100), phone: VARCHAR(50), company: VARCHAR(100), source: VARCHAR(50), score: INT, status: VARCHAR(20), created_at: TIMESTAMP
+
+Table: campaigns
+  Columns: id: INT, name: VARCHAR(100), description: TEXT, type: VARCHAR(50), start_date: DATE, end_date: DATE, budget: DECIMAL(10, 2), actual_cost: DECIMAL(10, 2), created_at: TIMESTAMP
+
+Table: email_logs
+  Columns: id: INT, campaign_ref: VARCHAR(50), recipient_email: VARCHAR(100), sent_at: TIMESTAMP, status: VARCHAR(20), opened: BOOLEAN, clicked: BOOLEAN, bounced: BOOLEAN, created_at: TIMESTAMP
+
+Table: sms_logs
+  Columns: id: INT, campaign_ref: VARCHAR(50), recipient_phone: VARCHAR(50), sent_at: TIMESTAMP, message_body: TEXT, status: VARCHAR(20), carrier_code: VARCHAR(20), cost: DECIMAL(6, 4), created_at: TIMESTAMP
+
+Table: survey_responses
+  Columns: id: INT, survey_name: VARCHAR(100), responder_email: VARCHAR(100), question_id: INT, answer_score: INT, comments: TEXT, submitted_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: marketing_lists
+  Columns: id: INT, list_name: VARCHAR(100), description: TEXT, segment_criteria: VARCHAR(255), is_smart_list: BOOLEAN, member_count: INT, last_synced_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: sales_pipelines
+  Columns: id: INT, pipeline_name: VARCHAR(100), stage_name: VARCHAR(50), display_order: INT, probability_pct: INT, description: TEXT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: customer_feedback
+  Columns: id: INT, customer_ref: VARCHAR(50), feedback_type: VARCHAR(20), subject: VARCHAR(150), details: TEXT, severity: VARCHAR(10), assigned_to: VARCHAR(100), resolved: BOOLEAN, created_at: TIMESTAMP
+
+Table: webinar_attendees
+  Columns: id: INT, webinar_id: VARCHAR(50), first_name: VARCHAR(50), last_name: VARCHAR(50), email: VARCHAR(100), registered_at: TIMESTAMP, attended: BOOLEAN, duration_minutes: INT, created_at: TIMESTAMP
+
+Table: competitor_trackers
+  Columns: id: INT, competitor_name: VARCHAR(100), product_name: VARCHAR(100), url: VARCHAR(255), monitored_price: DECIMAL(10, 2), availability: VARCHAR(20), last_checked_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: referral_programs
+  Columns: id: INT, program_name: VARCHAR(100), referral_code_prefix: VARCHAR(10), reward_type: VARCHAR(50), reward_value: DECIMAL(10, 2), max_referrals: INT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+------------------------------------------------------------
+6. IT & SYSTEM ADMINISTRATION DOMAIN (12 Tables)
+------------------------------------------------------------
+Table: audit_logs
+  Columns: id: INT, username: VARCHAR(100), action: VARCHAR(50), table_name: VARCHAR(100), row_id: VARCHAR(100), old_values: JSON, new_values: JSON, ip_address: VARCHAR(50), created_at: TIMESTAMP
+
+Table: error_logs
+  Columns: id: INT, app_name: VARCHAR(100), error_class: VARCHAR(100), error_message: TEXT, stack_trace: TEXT, severity: VARCHAR(20), is_resolved: BOOLEAN, resolved_by: VARCHAR(100), created_at: TIMESTAMP
+
+Table: system_configs
+  Columns: id: INT, config_key: VARCHAR(100), config_value: TEXT, data_type: VARCHAR(20), category: VARCHAR(50), is_encrypted: BOOLEAN, description: TEXT, created_at: TIMESTAMP
+
+Table: api_keys
+  Columns: id: VARCHAR(36), key_name: VARCHAR(100), hashed_key: VARCHAR(64), scopes: TEXT, rate_limit_rpm: INT, is_active: BOOLEAN, expires_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: scheduled_jobs
+  Columns: id: INT, job_name: VARCHAR(100), job_group: VARCHAR(50), cron_expression: VARCHAR(50), class_name: VARCHAR(255), is_concurrent: BOOLEAN, description: TEXT, created_at: TIMESTAMP
+
+Table: user_sessions
+  Columns: id: INT, session_id: VARCHAR(100), username: VARCHAR(100), ip_address: VARCHAR(50), user_agent: VARCHAR(255), payload: TEXT, last_activity: TIMESTAMP, created_at: TIMESTAMP
+
+Table: server_metrics
+  Columns: id: INT, server_id: VARCHAR(50), cpu_pct: DECIMAL(5, 2), ram_pct: DECIMAL(5, 2), disk_pct: DECIMAL(5, 2), network_in_mb: DECIMAL(10, 2), network_out_mb: DECIMAL(10, 2), recorded_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: backup_schedules
+  Columns: id: INT, backup_name: VARCHAR(100), source_path: VARCHAR(255), dest_bucket: VARCHAR(100), backup_type: VARCHAR(10), compression: VARCHAR(10), retention_days: INT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: security_policies
+  Columns: id: INT, policy_code: VARCHAR(50), policy_name: VARCHAR(150), description: TEXT, min_privilege_level: VARCHAR(20), enforced: BOOLEAN, last_reviewed_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: network_nodes
+  Columns: id: INT, node_name: VARCHAR(100), node_type: VARCHAR(50), ip_address: VARCHAR(50), mac_address: VARCHAR(50), subnet_mask: VARCHAR(50), gateway: VARCHAR(50), rack_unit: INT, created_at: TIMESTAMP
+
+Table: access_tokens
+  Columns: id: INT, jti: VARCHAR(100), subject: VARCHAR(100), issuer: VARCHAR(100), audience: VARCHAR(100), expires_at: TIMESTAMP, is_blacklisted: BOOLEAN, created_at: TIMESTAMP
+
+Table: ip_whitelists
+  Columns: id: INT, cidr_block: VARCHAR(50), description: VARCHAR(255), environment: VARCHAR(20), requested_by: VARCHAR(100), approved_by: VARCHAR(100), expiry_date: TIMESTAMP, created_at: TIMESTAMP
+
+------------------------------------------------------------
+7. CONTENT MANAGEMENT SYSTEM (CMS) DOMAIN (12 Tables)
+------------------------------------------------------------
+Table: articles
+  Columns: id: INT, title: VARCHAR(150), slug: VARCHAR(150), body: TEXT, author_name: VARCHAR(100), publish_date: TIMESTAMP, status: VARCHAR(20), view_count: INT, created_at: TIMESTAMP
+
+Table: tags
+  Columns: id: INT, name: VARCHAR(50), slug: VARCHAR(50), description: TEXT, color_hex: VARCHAR(7), post_count: INT, created_at: TIMESTAMP
+
+Table: media_files
+  Columns: id: INT, file_name: VARCHAR(255), file_path: VARCHAR(255), mime_type: VARCHAR(100), file_size_bytes: BIGINT, dimensions: VARCHAR(20), caption: TEXT, uploaded_by: VARCHAR(100), created_at: TIMESTAMP
+
+Table: comments
+  Columns: id: INT, article_ref: VARCHAR(150), author_name: VARCHAR(100), author_email: VARCHAR(100), body: TEXT, ip_address: VARCHAR(50), is_approved: BOOLEAN, likes: INT, created_at: TIMESTAMP
+
+Table: page_views
+  Columns: id: INT, page_url: VARCHAR(255), referrer_url: VARCHAR(255), user_agent: VARCHAR(255), session_id: VARCHAR(100), load_time_ms: INT, ip_address: VARCHAR(50), viewed_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: newsletters
+  Columns: id: INT, code: VARCHAR(50), title: VARCHAR(150), description: TEXT, schedule_day: VARCHAR(20), subscriber_count: INT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: faq_items
+  Columns: id: INT, question: TEXT, answer: TEXT, category: VARCHAR(50), sort_order: INT, is_published: BOOLEAN, helpful_votes: INT, unhelpful_votes: INT, created_at: TIMESTAMP
+
+Table: site_menus
+  Columns: id: INT, menu_name: VARCHAR(50), location_code: VARCHAR(20), is_hierarchical: BOOLEAN, item_count: INT, theme_class: VARCHAR(50), created_at: TIMESTAMP
+
+Table: seo_metadata
+  Columns: id: INT, path_pattern: VARCHAR(255), title_template: VARCHAR(255), meta_description: TEXT, meta_keywords: VARCHAR(255), og_type: VARCHAR(50), robots_txt: VARCHAR(50), created_at: TIMESTAMP
+
+Table: content_templates
+  Columns: id: INT, template_name: VARCHAR(100), theme_name: VARCHAR(50), markup: TEXT, variables_json: JSON, is_default: BOOLEAN, created_at: TIMESTAMP
+
+Table: poll_questions
+  Columns: id: INT, question: TEXT, choices_json: JSON, total_votes: INT, allow_multiple: BOOLEAN, start_date: DATE, end_date: DATE, created_at: TIMESTAMP
+
+Table: banner_ads
+  Columns: id: INT, ad_name: VARCHAR(100), image_url: VARCHAR(255), target_url: VARCHAR(255), zone_code: VARCHAR(20), impressions: INT, clicks: INT, is_active: BOOLEAN, created_at: TIMESTAMP
+
+------------------------------------------------------------
+8. EDUCATION DOMAIN (12 Tables)
+------------------------------------------------------------
+Table: courses
+  Columns: id: INT, course_code: VARCHAR(20), title: VARCHAR(150), description: TEXT, credits: INT, department: VARCHAR(100), syllabus_url: VARCHAR(255), created_at: TIMESTAMP
+
+Table: enrollments
+  Columns: id: INT, student_ref: VARCHAR(50), course_ref: VARCHAR(20), enrollment_date: DATE, status: VARCHAR(20), final_grade: VARCHAR(2), paid: BOOLEAN, created_at: TIMESTAMP
+
+Table: certificates
+  Columns: id: VARCHAR(36), certificate_no: VARCHAR(50), recipient_name: VARCHAR(100), course_title: VARCHAR(150), issue_date: DATE, grade_achieved: VARCHAR(10), verification_hash: VARCHAR(64), created_at: TIMESTAMP
+
+Table: instructors
+  Columns: id: INT, first_name: VARCHAR(50), last_name: VARCHAR(50), email: VARCHAR(100), office: VARCHAR(50), biography: TEXT, department: VARCHAR(100), is_tenured: BOOLEAN, created_at: TIMESTAMP
+
+Table: quiz_results
+  Columns: id: INT, student_ref: VARCHAR(50), quiz_name: VARCHAR(100), score: DECIMAL(5, 2), max_score: DECIMAL(5, 2), time_taken_seconds: INT, submitted_at: TIMESTAMP, created_at: TIMESTAMP
+
+Table: student_grades
+  Columns: id: INT, student_ref: VARCHAR(50), term_name: VARCHAR(20), gpa: DECIMAL(3, 2), total_credits: INT, academic_standing: VARCHAR(50), notes: TEXT, created_at: TIMESTAMP
+
+Table: academic_terms
+  Columns: id: INT, term_name: VARCHAR(20), start_date: DATE, end_date: DATE, class_days: INT, exam_start_date: DATE, is_active: BOOLEAN, created_at: TIMESTAMP
+
+Table: classrooms
+  Columns: id: INT, building: VARCHAR(100), room_number: VARCHAR(20), capacity: INT, has_projector: BOOLEAN, has_lab_equipment: BOOLEAN, created_at: TIMESTAMP
+
+Table: textbooks
+  Columns: id: INT, isbn: VARCHAR(20), title: VARCHAR(255), author: VARCHAR(150), publisher: VARCHAR(150), edition: INT, price: DECIMAL(6, 2), created_at: TIMESTAMP
+
+Table: tuition_fees
+  Columns: id: INT, fee_code: VARCHAR(20), description: VARCHAR(255), amount: DECIMAL(8, 2), semester: VARCHAR(20), due_date: DATE, is_refundable: BOOLEAN, created_at: TIMESTAMP
+
+Table: alumni_records
+  Columns: id: INT, student_ref: VARCHAR(50), graduation_year: INT, degree_program: VARCHAR(100), contact_email: VARCHAR(100), donation_total: DECIMAL(10, 2), current_employer: VARCHAR(150), created_at: TIMESTAMP
+
+Table: degree_programs
+  Columns: id: INT, program_name: VARCHAR(100), degree_type: VARCHAR(10), minimum_credits: INT, head_of_program: VARCHAR(100), department: VARCHAR(100), accreditation_expiry: DATE, created_at: TIMESTAMP
