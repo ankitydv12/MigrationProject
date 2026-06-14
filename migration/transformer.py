@@ -1,0 +1,216 @@
+import sys
+import os
+import logging
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    
+from migration.extract import extract_table_data
+
+
+# Tables with JSON columns and which columns are JSON
+JSON_COLUMNS = {
+    "audit_logs"        : ["old_values", "new_values"],
+    "content_templates" : ["variables_json"],
+    "poll_questions"    : ["choices_json"]
+}
+
+# Tables with UUID primary keys
+UUID_TABLES = [
+    "employees",
+    "invoices", 
+    "api_keys",
+    "certificates"
+]
+
+# Tables with boolean columns and which columns are boolean
+BOOLEAN_COLUMNS = {
+    "payment_methods"   : ["is_active"],
+    "benefits_packages" : ["is_active"],
+    "employee_skills"   : ["certified"],
+    "timesheets"        : ["is_approved"],
+    "gl_accounts"       : ["is_active"],
+    "journal_entries"   : ["posted"],
+    "tax_records"       : ["paid"],
+    "expense_reports"   : ["audited"],
+    "bank_transactions" : ["reconciled"],
+    "fiscal_periods"    : ["is_closed"],
+    "warehouses"        : ["is_active"],
+    "delivery_routes"   : ["active"],
+    "freight_carriers"  : ["is_preferred"],
+    "driver_logs"       : ["violation_occurred"],
+    "email_logs"        : ["opened", "clicked", "bounced"],
+    "marketing_lists"   : ["is_smart_list"],
+    "sales_pipelines"   : ["is_active"],
+    "customer_feedback" : ["resolved"],
+    "webinar_attendees" : ["attended"],
+    "referral_programs" : ["is_active"],
+    "error_logs"        : ["is_resolved"],
+    "system_configs"    : ["is_encrypted"],
+    "api_keys"          : ["is_active"],
+    "scheduled_jobs"    : ["is_concurrent"],
+    "backup_schedules"  : ["is_active"],
+    "security_policies" : ["enforced"],
+    "access_tokens"     : ["is_blacklisted"],
+    "comments"          : ["is_approved"],
+    "newsletters"       : ["is_active"],
+    "faq_items"         : ["is_published"],
+    "site_menus"        : ["is_hierarchical"],
+    "content_templates" : ["is_default"],
+    "poll_questions"    : ["allow_multiple"],
+    "banner_ads"        : ["is_active"],
+    "enrollments"       : ["paid"],
+    "instructors"       : ["is_tenured"],
+    "academic_terms"    : ["is_active"],
+    "classrooms"        : ["has_projector", "has_lab_equipment"],
+    "tuition_fees"      : ["is_refundable"]
+}
+
+import json
+import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
+
+def transform_json_columns(df, table_name):
+    """
+    Converts JSON string columns to Python dicts.
+    psycopg2 will handle dict → PostgreSQL JSONB correctly.
+    """
+    columns_to_convert = JSON_COLUMNS.get(table_name, [])
+    
+    for col in columns_to_convert:
+        if col in df.columns:
+            def safe_parse(value):
+                if value is None:
+                    return None
+                if isinstance(value, dict):
+                    return value      # already parsed
+                try:
+                    return json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning(
+                        f"{table_name}.{col} has invalid "
+                        f"JSON value: {value}"
+                    )
+                    return None       # return None for bad JSON
+            
+            df[col] = df[col].apply(safe_parse)
+            logger.info(f"JSON converted: {table_name}.{col}")
+    
+    return df
+
+def transform_boolean_columns(df, table_name):
+    """
+    Converts TINYINT(1) integer columns to Python bool.
+    0 → False, 1 → True
+    """
+    # Step 1: get list of boolean columns for this table
+    columns_to_convert = BOOLEAN_COLUMNS.get(table_name, [])
+    
+    # Step 2: loop through each column
+    for col in columns_to_convert:
+        if col in df.columns:
+            # Step 3: convert to bool
+            # handle None/NaN values carefully
+            df[col] = df[col].apply(
+    lambda x: bool(x) if pd.notna(x) else None
+).astype(object)
+            logger.info(f"Boolean converted: {table_name}.{col}")
+    
+    return df
+
+import uuid as uuid_lib
+
+def transform_uuid_columns(df, table_name):
+    """
+    Validates UUID format in UUID primary key tables.
+    MySQL stores as VARCHAR(36), PostgreSQL needs valid UUID string.
+    """
+    if table_name not in UUID_TABLES:
+        return df
+    
+    def validate_uuid(value):
+        if value is None:
+            return None
+        try:
+            # this validates format and returns clean UUID string
+            return str(uuid_lib.UUID(str(value)))
+        except ValueError:
+            logger.warning(
+                f"{table_name} has invalid UUID: {value}"
+            )
+            return value    # return as is if validation fails
+    
+    if "id" in df.columns:
+        df["id"] = df["id"].apply(validate_uuid)
+        logger.info(f"UUID validated: {table_name}.id")
+    
+    return df
+
+def transform_table(df, table_name):
+    """
+    Master transformation function.
+    Applies all necessary transformations for a given table.
+    Returns clean DataFrame ready for PostgreSQL.
+    """
+    logger.info(f"Transforming table: {table_name}")
+    
+    # Step 1: apply JSON transformation if needed
+    df = transform_json_columns(df,table_name) 
+    
+    # Step 2: apply boolean transformation if needed
+    df = transform_boolean_columns(df,table_name)
+    
+    # Step 3: apply UUID transformation if needed
+    df = transform_uuid_columns(df,table_name)
+    
+    logger.info(f"Transformation complete: {table_name} "
+               f"| rows: {len(df)}")
+    
+    return df
+
+def transform_all_tables(extracted_data):
+    """
+    Takes the full dict from extractor.
+    Returns transformed dict ready for loader.
+    
+    extracted_data = {"table_name": DataFrame, ...}
+    transformed_data = {"table_name": DataFrame, ...}
+    """
+    transformed_data = {}
+    
+    for table_name, df in extracted_data.items():
+        transformed_data[table_name] = transform_table(df, table_name)
+    
+    logger.info(f"All tables transformed: {len(transformed_data)}")
+    return transformed_data
+
+if __name__ == "__main__":
+
+    
+    # Test 1 - JSON transformation
+    print("\n--- Testing JSON transformation ---")
+    df = extract_table_data("audit_logs")
+    df_transformed = transform_table(df, "audit_logs")
+    print(f"old_values type after transform: "
+          f"{type(df_transformed['old_values'].iloc[0])}")
+    # should print <class 'dict'> not <class 'str'>
+    
+    # Test 2 - Boolean transformation
+    print("\n--- Testing Boolean transformation ---")
+    df = extract_table_data("payment_methods")
+    df_transformed = transform_table(df, "payment_methods")
+    print(f"is_active type after transform: "
+          f"{type(df_transformed['is_active'].iloc[0])}")
+    # should print <class 'bool'>
+    
+    # Test 3 - UUID transformation
+    print("\n--- Testing UUID transformation ---")
+    df = extract_table_data("employees")
+    df_transformed = transform_table(df, "employees")
+    print(f"UUID sample: {df_transformed['id'].iloc[0]}")
+    # should print properly formatted UUID string
