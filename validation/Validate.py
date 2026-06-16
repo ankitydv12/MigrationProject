@@ -1,9 +1,7 @@
-
 import os
 import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-
 import pandas as pd
 import logging
 from config.db_config import get_mysql_engine , get_postgres_connection
@@ -15,8 +13,8 @@ def get_mysql_row_counts():
     try:
         query = """
                 SELECT 
-                    table_name ,
-                    table_row as row_count
+                    table_name as table_name ,
+                    table_rows as row_count
                 FROM Information_schema.tables
                 Where table_schema = DATABASE()
         """
@@ -38,8 +36,8 @@ def get_postgres_row_count(table_names):
             cursor.execute("""
                 Select count(*) from {}
             """.format(table))
-        count = cursor.fetchone()[0]
-        counts[table] = count
+            count = cursor.fetchone()[0]
+            counts[table] = count
         
         logger.info(f"PostgreSQL row counts fetched "
                    f"for {len(counts)} tables")
@@ -155,3 +153,16 @@ def run_validation():
     success = generate_report(validation_results)
     
     return success
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+    
+    success = run_validation()
+    
+    if success:
+        print("\n✓ Migration validated successfully")
+    else:
+        print("\n✗ Validation failed - check report")
