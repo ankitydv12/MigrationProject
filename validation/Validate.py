@@ -10,19 +10,29 @@ logger = logging.getLogger(__name__)
 
 def get_mysql_row_counts():
     engine = get_mysql_engine()
+    counts = {}
+    
     try:
-        query = """
-                SELECT 
-                    table_name as table_name ,
-                    table_rows as row_count
-                FROM Information_schema.tables
-                Where table_schema = DATABASE()
-        """
-
-        df = pd.read_sql_query(query,engine)
-        counts = dict(zip(df["table_name"],df['row_count']))
-        logger.info(f"Mysql Row Count {len(counts)}")
+        # first get all table names
+        table_df = pd.read_sql(
+            "SHOW TABLES", engine
+        )
+        # SHOW TABLES returns one column
+        # column name varies so use iloc
+        table_names = table_df.iloc[:, 0].tolist()
+        
+        # now count each table exactly
+        for table in table_names:
+            count_df = pd.read_sql(
+                f"SELECT COUNT(*) as cnt FROM {table}",
+                engine
+            )
+            counts[table] = int(count_df['cnt'].iloc[0])
+        
+        logger.info(f"MySQL exact row counts fetched "
+                   f"for {len(counts)} tables")
         return counts
+    
     finally:
         engine.dispose()
 
