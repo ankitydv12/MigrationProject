@@ -9,6 +9,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+from utils.schema_analyzer import analyze_schema
 from migration.extract import extract_all_tables, get_table_schema
 from migration.transformer import transform_all_tables
 from migration.loader import load_all_tables
@@ -17,6 +18,18 @@ from validation.Validate import run_validation
 def main():
     print("\n" + "="*50)
     print("MYSQL TO POSTGRESQL MIGRATION PIPELINE")
+    print("="*50)
+    
+    # Analyze schema once at the start of the pipeline
+    schema_info = analyze_schema()
+    
+    # Print summary of what was auto-detected
+    print("\n=== AUTO-DETECTED SCHEMA SUMMARY ===")
+    print(f"Total tables found           : {len(schema_info['migration_order'])}")
+    print(f"Total FK relationships       : {len(schema_info['foreign_keys'])}")
+    print(f"UUID tables detected         : {len(schema_info['uuid_tables'])} {schema_info['uuid_tables']}")
+    print(f"JSON column tables detected  : {len(schema_info['json_columns'])} {list(schema_info['json_columns'].keys())}")
+    print(f"Boolean column tables detected: {len(schema_info['boolean_columns'])}")
     print("="*50)
     
     # Step 1: Extract

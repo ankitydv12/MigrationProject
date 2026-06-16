@@ -60,8 +60,10 @@ sys.path.append(project_root)
 from config.db_config import get_mysql_engine
 from sqlalchemy import inspect
 import logging
+from utils.schema_analyzer import analyze_schema
 
-logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+schema_info = analyze_schema()
 
 
 def get_all_table_names():
@@ -133,55 +135,11 @@ python
 """
 def get_migration_order():
     """
-    Returns two separate lists:
-    1. Ordered list of 20 ecommerce tables (FK dependency order)
-    2. List of 80 independent tables (any order)
-    
-    Ecommerce tables must migrate parent before child.
+    Returns the dynamic migration order from schema analysis.
     """
-    
-    # Hardcode the ecommerce order based on your ER diagram
-    # You already know this from the ER details file
-    ecommerce_ordered = [
-        # Level 0 - no dependencies
-        "countries",
-        "suppliers", 
-        "products",
-        "product_categories",
-        "payment_methods",
-        "coupons",
-        
-        # Level 1 - depends on level 0
-        "regions",
-        "product_variants",
-        "supplier_products",
-        
-        # Level 2 - depends on level 1
-        "addresses",
-        "inventory",
-        
-        # Level 3 - depends on level 2
-        "customers",
-        
-        # Level 4 - depends on level 3
-        "orders",
-        "carts",
-        "coupon_usage",
-        "reviews",
-        
-        # Level 5 - depends on level 4
-        "order_items",
-        "payments",
-        "shipment_tracking",
-        "cart_items"
-    ]
-
-    all_tables = get_all_table_names()
-    independent_tables = [t for t in all_tables if t not in ecommerce_ordered]
-
-    logging.info(f"Ecommer Tables : {len(ecommerce_ordered)}")
-    logging.info(f"Independe Tables  : {len(independent_tables)}")
-    return ecommerce_ordered, independent_tables
+    migration_order = schema_info["migration_order"]
+    logger.info(f"Migration order loaded dynamically: {len(migration_order)} tables")
+    return migration_order
 
 
 # Function 4 - extract_table_data()
@@ -227,10 +185,7 @@ def extract_all_tables():
     }
     """
     #Step 1 : Get migration order 
-    ecommers_tables , independent_tables = get_migration_order() 
-
-    #Step 2 : Combine 
-    all_tables_ordered  = ecommers_tables + independent_tables
+    all_tables_ordered = get_migration_order() 
 
     #step 3 : loop through and extract each table
     extracted_data = {}
@@ -265,6 +220,6 @@ if __name__ == "__main__":
     print(df.head(3))
     
     # Test 4 - migration order
-    ec, ind = get_migration_order()
-    print(f"Ecommerce order: {ec}")
-    print(f"Independent count: {len(ind)}")   
+    order = get_migration_order()
+    print(f"Migration order (first 10): {order[:10]}")
+    print(f"Total tables in migration order: {len(order)}")

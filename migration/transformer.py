@@ -9,78 +9,20 @@ logging.basicConfig(
     )
     
 from migration.extract import extract_table_data
-
-
-# Tables with JSON columns and which columns are JSON
-JSON_COLUMNS = {
-    "audit_logs"        : ["old_values", "new_values"],
-    "content_templates" : ["variables_json"],
-    "poll_questions"    : ["choices_json"]
-}
-
-# Tables with UUID primary keys
-UUID_TABLES = [
-    "employees",
-    "invoices", 
-    "api_keys",
-    "certificates"
-]
-
-# Tables with boolean columns and which columns are boolean
-BOOLEAN_COLUMNS = {
-    "payment_methods"   : ["is_active"],
-    "benefits_packages" : ["is_active"],
-    "employee_skills"   : ["certified"],
-    "timesheets"        : ["is_approved"],
-    "gl_accounts"       : ["is_active"],
-    "journal_entries"   : ["posted"],
-    "tax_records"       : ["paid"],
-    "expense_reports"   : ["audited"],
-    "bank_transactions" : ["reconciled"],
-    "fiscal_periods"    : ["is_closed"],
-    "warehouses"        : ["is_active"],
-    "delivery_routes"   : ["active"],
-    "freight_carriers"  : ["is_preferred"],
-    "driver_logs"       : ["violation_occurred"],
-    "email_logs"        : ["opened", "clicked", "bounced"],
-    "marketing_lists"   : ["is_smart_list"],
-    "sales_pipelines"   : ["is_active"],
-    "customer_feedback" : ["resolved"],
-    "webinar_attendees" : ["attended"],
-    "referral_programs" : ["is_active"],
-    "error_logs"        : ["is_resolved"],
-    "system_configs"    : ["is_encrypted"],
-    "api_keys"          : ["is_active"],
-    "scheduled_jobs"    : ["is_concurrent"],
-    "backup_schedules"  : ["is_active"],
-    "security_policies" : ["enforced"],
-    "access_tokens"     : ["is_blacklisted"],
-    "comments"          : ["is_approved"],
-    "newsletters"       : ["is_active"],
-    "faq_items"         : ["is_published"],
-    "site_menus"        : ["is_hierarchical"],
-    "content_templates" : ["is_default"],
-    "poll_questions"    : ["allow_multiple"],
-    "banner_ads"        : ["is_active"],
-    "enrollments"       : ["paid"],
-    "instructors"       : ["is_tenured"],
-    "academic_terms"    : ["is_active"],
-    "classrooms"        : ["has_projector", "has_lab_equipment"],
-    "tuition_fees"      : ["is_refundable"]
-}
-
+from utils.schema_analyzer import analyze_schema
 import json
 import pandas as pd
-import logging
+import uuid as uuid_lib
 
 logger = logging.getLogger(__name__)
+schema_info = analyze_schema()
 
 def transform_json_columns(df, table_name):
     """
     Converts JSON string columns to Python dicts.
     psycopg2 will handle dict → PostgreSQL JSONB correctly.
     """
-    columns_to_convert = JSON_COLUMNS.get(table_name, [])
+    columns_to_convert = schema_info["json_columns"].get(table_name, [])
     
     for col in columns_to_convert:
         if col in df.columns:
@@ -109,7 +51,7 @@ def transform_boolean_columns(df, table_name):
     0 → False, 1 → True
     """
     # Step 1: get list of boolean columns for this table
-    columns_to_convert = BOOLEAN_COLUMNS.get(table_name, [])
+    columns_to_convert = schema_info["boolean_columns"].get(table_name, [])
     
     # Step 2: loop through each column
     for col in columns_to_convert:
@@ -123,14 +65,12 @@ def transform_boolean_columns(df, table_name):
     
     return df
 
-import uuid as uuid_lib
-
 def transform_uuid_columns(df, table_name):
     """
     Validates UUID format in UUID primary key tables.
     MySQL stores as VARCHAR(36), PostgreSQL needs valid UUID string.
     """
-    if table_name not in UUID_TABLES:
+    if table_name not in schema_info["uuid_tables"]:
         return df
     
     def validate_uuid(value):

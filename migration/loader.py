@@ -8,16 +8,10 @@ sys.path.append(project_root)
 from config.db_config import get_postgres_connection, get_mysql_engine
 from sqlalchemy import inspect
 import logging
-
-
+from utils.schema_analyzer import analyze_schema
 
 logger = logging.getLogger(__name__)
-UUID_TABLES = [
-    "employees",
-    "invoices",
-    "api_keys",
-    "certificates"
-]
+schema_info = analyze_schema()
 
 from sqlalchemy.dialects.mysql import (
     INTEGER, BIGINT, SMALLINT, TINYINT,
@@ -43,12 +37,11 @@ def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
         return "JSONB"
     
     # UUID columns - VARCHAR(36) in UUID tables
-    if "VARCHAR(36)" in type_str and table_name in UUID_TABLES:
+    if "VARCHAR(36)" in type_str and table_name in schema_info["uuid_tables"]:
         return "UUID"
     
-    # Boolean - TINYINT(1) or if listed in BOOLEAN_COLUMNS
-    from migration.transformer import BOOLEAN_COLUMNS
-    if "TINYINT(1)" in type_str or "BOOL" in type_str or col_name in BOOLEAN_COLUMNS.get(table_name, []):
+    # Boolean - TINYINT(1) or if listed in boolean_columns
+    if "TINYINT(1)" in type_str or "BOOL" in type_str or col_name in schema_info["boolean_columns"].get(table_name, []):
         return "BOOLEAN"
     
     # Integer types
@@ -88,75 +81,6 @@ def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
         f" defaulting to TEXT"
     )
     return "TEXT"
-
-
-FOREIGN_KEYS = [
-    # regions → countries
-    ("regions", "country_id", "countries", "id"),
-    
-    # addresses → regions
-    ("addresses", "region_id", "regions", "id"),
-    
-    # customers → addresses
-    ("customers", "address_id", "addresses", "id"),
-    
-    # product_variants → products
-    ("product_variants", "product_id", "products", "id"),
-    
-    # product_variants → product_categories
-    ("product_variants", "category_id", "product_categories", "id"),
-    
-    # inventory → product_variants
-    ("inventory", "variant_id", "product_variants", "id"),
-    
-    # supplier_products → suppliers
-    ("supplier_products", "supplier_id", "suppliers", "id"),
-    
-    # supplier_products → products
-    ("supplier_products", "product_id", "products", "id"),
-    
-    # orders → customers
-    ("orders", "customer_id", "customers", "id"),
-    
-    # orders → payment_methods
-    ("orders", "payment_method_id", "payment_methods", "id"),
-    
-    # order_items → orders
-    ("order_items", "order_id", "orders", "id"),
-    
-    # order_items → product_variants
-    ("order_items", "variant_id", "product_variants", "id"),
-    
-    # payments → orders
-    ("payments", "order_id", "orders", "id"),
-    
-    # payments → payment_methods
-    ("payments", "payment_method_id", "payment_methods", "id"),
-    
-    # coupon_usage → coupons
-    ("coupon_usage", "coupon_id", "coupons", "id"),
-    
-    # coupon_usage → customers
-    ("coupon_usage", "customer_id", "customers", "id"),
-    
-    # shipment_tracking → orders
-    ("shipment_tracking", "order_id", "orders", "id"),
-    
-    # reviews → customers
-    ("reviews", "customer_id", "customers", "id"),
-    
-    # reviews → products
-    ("reviews", "product_id", "products", "id"),
-    
-    # carts → customers
-    ("carts", "customer_id", "customers", "id"),
-    
-    # cart_items → carts
-    ("cart_items", "cart_id", "carts", "id"),
-    
-    # cart_items → product_variants
-    ("cart_items", "variant_id", "product_variants", "id"),
-]
 
 def create_postgres_table(pg_conn, table_name, mysql_schema):
     """
@@ -333,6 +257,10 @@ def reset_sequence(pg_conn, table_name, pk_column="id"):
     Without this: next INSERT will try id=1 and fail
     With this: next INSERT continues from max_id + 1
     """
+    if table_name in schema_info["uuid_tables"]:
+        logger.info(f"Skipping sequence reset for UUID table: {table_name}")
+        return
+        
     cursor = pg_conn.cursor()
     
     try:
@@ -373,7 +301,7 @@ def load_table(pg_conn, table_name, df, mysql_schema):
 
     # Step 3: reset sequence only for non UUID tables
     # UUID tables dont have SERIAL so no sequence to reset
-    if table_name not in UUID_TABLES:
+    if table_name not in schema_info["uuid_tables"]:
         reset_sequence(pg_conn, table_name)
 
     return row_count
@@ -452,7 +380,7 @@ def add_foreign_keys(pg_conn):
     
     try:
         for child_table, child_col, parent_table, parent_col \
-        in FOREIGN_KEYS:
+        in schema_info["foreign_keys"]:
             
             # generate unique constraint name
             constraint_name = (
