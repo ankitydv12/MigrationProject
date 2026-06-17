@@ -4,3 +4,4 @@ python-dotenv
 pandas
 faker
 sqlalchemy
+PyQt5
