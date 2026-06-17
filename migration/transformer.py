@@ -91,7 +91,7 @@ def transform_uuid_columns(df, table_name):
     
     return df
 
-def transform_table(df, table_name):
+def transform_table(df, table_name, schema_info=None):
     """
     Master transformation function.
     Applies all necessary transformations for a given table.

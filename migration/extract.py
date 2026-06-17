@@ -91,12 +91,16 @@ Function 2 - get_table_schema()
 This is important. It reads schema of one table and returns it as a structured dict.
 """
 #This is what transformer.py will use later to convert MySQL types to PostgreSQL types.
-def get_table_schema(table_name):
+def get_table_schema(table_name, engine=None):
     """
     Returns schema details of a single table.
     Returns dict with columns, primary keys, foreign keys.
     """
-    engine = get_mysql_engine()
+    if engine is None:
+        engine = get_mysql_engine()
+        should_dispose = True
+    else:
+        should_dispose = False
     
     try:
         inspector = inspect(engine)
@@ -126,7 +130,8 @@ def get_table_schema(table_name):
         raise
     
     finally:
-        engine.dispose()
+        if should_dispose:
+            engine.dispose()
 
 """
 Function 3 - get_migration_order()
@@ -145,7 +150,7 @@ def get_migration_order():
 # Function 4 - extract_table_data()
 # This is the core extraction function. Every table goes through this.
 import pandas as pd 
-def extract_table_data(table_name, chunksize=1000):
+def extract_table_data(table_name, chunksize=1000, engine=None):
     """
     Extracts data from a single MySQL table.
     Returns data as pandas DataFrame chunks.
@@ -153,7 +158,11 @@ def extract_table_data(table_name, chunksize=1000):
     Uses chunksize to avoid loading entire table in memory.
     For 10k rows with chunksize=1000, gives 10 chunks of 1000 rows each.
     """
-    engine = get_mysql_engine()
+    if engine is None:
+        engine = get_mysql_engine()
+        should_dispose = True
+    else:
+        should_dispose = False
     try:
         logging.info(f"Extracting rows from  {table_name}")
         chunks = []
@@ -170,7 +179,8 @@ def extract_table_data(table_name, chunksize=1000):
     except Exception as e:
         logging.error(f"Extraction Fail for {table_name} : {e}")
     finally:
-        engine.dispose()
+        if should_dispose:
+            engine.dispose()
 
 def extract_all_tables():
     """

@@ -89,7 +89,7 @@ def get_mysql_engine():
         Database_url = (
             f"mysql+mysqlconnector://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
         )
-        engine = create_engine(Database_url,pool_pre_ping=True)
+        engine = create_engine(Database_url,pool_pre_ping=True,connect_args={"use_pure": True})
         logging.info("Succesfully connected mysql using alchemy")
         return engine
     except Exception as e:

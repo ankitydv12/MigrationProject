@@ -1,117 +1,85 @@
-import sys
-import os
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-
 from PyQt5.QtWidgets import (
-    QMainWindow, QStackedWidget, QMessageBox
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+    QFormLayout, QLineEdit, QPushButton, QProgressBar, QTextEdit, QMessageBox
 )
+from sqlalchemy import create_engine
+from ui.migration_worker import MigrationWorker
 
-from ui.connection_screen import ConnectionScreen
-# from ui.table_selection_screen import TableSelectionScreen
-# from ui.migration_screen import MigrationScreen
+def _create_mysql_engine(host, port, user, password, database):
+    # Create MySQL engine.
+    url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
+    return create_engine(url, pool_pre_ping=True, connect_args={"use_pure": True})
 
-# screen index constants
-SCREEN_CONNECTION = 0
-SCREEN_TABLES     = 1
-SCREEN_MIGRATION  = 2
+def _create_postgres_engine(host, port, user, password, database):
+    # Create PostgreSQL engine.
+    url = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
+    return create_engine(url, pool_pre_ping=True, pool_size=5)
 
 class MainWindow(QMainWindow):
-    
     def __init__(self):
+        # Initialize MainWindow and construct visual elements.
         super().__init__()
-        self.setWindowTitle(
-            "MySQL to PostgreSQL Migration Tool"
-        )
-        self.setMinimumSize(900, 650)
-        
-        # engines stored here and passed between screens
-        self.mysql_engine    = None
-        self.postgres_engine = None
-        
-        # stack holds all three screens
-        self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
-        
-        # create screens
-        self.connection_screen = ConnectionScreen()
-        # self.table_screen      = TableSelectionScreen()
-        # self.migration_screen  = MigrationScreen()
-        
-        # add to stack in order
-        self.stack.addWidget(self.connection_screen)
-        # self.stack.addWidget(self.table_screen)
-        # self.stack.addWidget(self.migration_screen)
-        
-        # connect signals
-        self.connection_screen.connected.connect(
-            self._on_connected
-        )
-        # self.table_screen.tables_selected.connect(
-        #     self._on_tables_selected
-        # )
-        # self.migration_screen.migration_done.connect(
-        #     self._on_migration_done
-        # )
-        
-        # start on connection screen
-        self.stack.setCurrentIndex(SCREEN_CONNECTION)
-        self.statusBar().showMessage(
-            "Step 1: Configure database connections"
-        )
-    
-    def _on_connected(self, mysql_engine, postgres_engine):
-        """Called when connection screen verifies both DBs."""
-        self.mysql_engine    = mysql_engine
-        self.postgres_engine = postgres_engine
-        
-        # pass mysql engine to table selection screen
-        self.table_screen.set_source_engine(mysql_engine)
-        
-        # move to table selection screen
-        self.stack.setCurrentIndex(SCREEN_TABLES)
-        self.statusBar().showMessage(
-            "Step 2: Select tables to migrate"
-        )
-    
-    def _on_tables_selected(self, tables, options):
-        """Called when user selects tables and clicks start."""
-        # configure migration screen
-        self.migration_screen.configure(
-            self.mysql_engine,
-            self.postgres_engine,
-            tables,
-            options
-        )
-        
-        # move to migration screen
-        self.stack.setCurrentIndex(SCREEN_MIGRATION)
-        self.statusBar().showMessage(
-            "Step 3: Migration in progress..."
-        )
-    
-    def _on_migration_done(self, result):
-        """Called when migration finishes."""
-        status = "PASSED" if result.get(
-            "validated", False
-        ) else "COMPLETED"
-        
-        self.statusBar().showMessage(
-            f"Migration {status} | "
-            f"Rows: {result.get('total_rows', 0):,} | "
-            f"Tables: {result.get('total_tables', 0)}"
-        )
-        
-        QMessageBox.information(
-            self,
-            "Migration Complete",
-            f"Migration finished successfully!\n\n"
-            f"Total rows migrated : "
-            f"{result.get('total_rows', 0):,}\n"
-            f"Total tables        : "
-            f"{result.get('total_tables', 0)}\n"
-            f"Failed tables       : "
-            f"{len(result.get('failed_tables', []))}\n"
-            f"Validation          : {status}"
-        )
+        self.setWindowTitle("MySQL to PostgreSQL Migration Tool")
+        self.setMinimumSize(850, 650)
+        widget = QWidget()
+        self.setCentralWidget(widget)
+        layout = QVBoxLayout(widget)
+        top = QHBoxLayout()
+        self.m_grp, self.m_in = self._form("MySQL Settings", [("Host", "localhost"), ("Port", "3306"), ("User", "root"), ("Password", ""), ("Database", "migration_db")])
+        self.p_grp, self.p_in = self._form("PostgreSQL Settings", [("Host", "localhost"), ("Port", "5432"), ("User", "postgres"), ("Password", ""), ("Database", "migrated_db")])
+        top.addWidget(self.m_grp)
+        top.addWidget(self.p_grp)
+        layout.addLayout(top)
+        self.btn = QPushButton("Connect & Migrate")
+        self.btn.setFixedHeight(45)
+        self.btn.clicked.connect(self._start)
+        layout.addWidget(self.btn)
+        self.progress = QProgressBar()
+        layout.addWidget(self.progress)
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(250)
+        layout.addWidget(self.log)
+        self.statusBar().showMessage("Ready")
+
+    def _form(self, title, fields):
+        # Dynamically build credentials form.
+        grp = QGroupBox(title)
+        lay = QFormLayout(grp)
+        inputs = {}
+        for label, default in fields:
+            edit = QLineEdit(default)
+            if label == "Password":
+                edit.setEchoMode(QLineEdit.Password)
+            lay.addRow(label, edit)
+            inputs[label.lower()] = edit
+        return grp, inputs
+
+    def _start(self):
+        # Handle Connect & Migrate button action.
+        m = {k: v.text() for k, v in self.m_in.items()}
+        p = {k: v.text() for k, v in self.p_in.items()}
+        self.btn.setEnabled(False)
+        self.log.clear()
+        self.statusBar().showMessage("Starting migration...")
+        my_eng = _create_mysql_engine(m['host'], m['port'], m['user'], m['password'], m['database'])
+        pg_eng = _create_postgres_engine(p['host'], p['port'], p['user'], p['password'], p['database'])
+        self.worker = MigrationWorker(my_eng, pg_eng)
+        self.worker.log_message.connect(self.log.append)
+        self.worker.progress.connect(self.progress.setValue)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.error.connect(self._on_error)
+        self.worker.start()
+
+    def _on_finished(self, result):
+        # Handle worker success signal.
+        self.btn.setEnabled(True)
+        self.statusBar().showMessage("Migration complete.")
+        msg = f"Migration finished successfully!\nTotal rows: {result.get('total_rows', 0)}\nTotal tables: {result.get('total_tables', 0)}"
+        QMessageBox.information(self, "Success", msg)
+
+    def _on_error(self, err_msg):
+        # Handle worker error signal.
+        self.btn.setEnabled(True)
+        self.log.append(f"ERROR: {err_msg}")
+        self.statusBar().showMessage("Migration failed.")

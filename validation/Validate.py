@@ -8,8 +8,12 @@ from config.db_config import get_mysql_engine , get_postgres_connection
 
 logger = logging.getLogger(__name__)
 
-def get_mysql_row_counts():
-    engine = get_mysql_engine()
+def get_mysql_row_counts(engine=None):
+    if engine is None:
+        engine = get_mysql_engine()
+        should_dispose = True
+    else:
+        should_dispose = False
     counts = {}
     
     try:
@@ -34,11 +38,17 @@ def get_mysql_row_counts():
         return counts
     
     finally:
-        engine.dispose()
+        if should_dispose:
+            engine.dispose()
 
 
-def get_postgres_row_count(table_names):
-    conn = get_postgres_connection()
+def get_postgres_row_count(table_names, engine=None):
+    if engine is None:
+        conn = get_postgres_connection()
+        should_close = True
+    else:
+        conn = engine.raw_connection()
+        should_close = True
     cursor = conn.cursor()
     counts = {}
     try:
@@ -55,7 +65,8 @@ def get_postgres_row_count(table_names):
     
     finally:
         cursor.close()
-        conn.close()
+        if should_close:
+            conn.close()
 
 
 def validate_row_counts(mysql_counts, pg_counts):

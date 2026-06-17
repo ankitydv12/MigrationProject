@@ -286,7 +286,7 @@ def reset_sequence(pg_conn, table_name, pk_column="id"):
         cursor.close()
 
 
-def load_table(pg_conn, table_name, df, mysql_schema):
+def load_table(pg_conn, table_name, df, mysql_schema, schema_info=None):
     """
     Complete load process for one table.
     1. Create table in PostgreSQL
@@ -369,7 +369,7 @@ def load_all_tables(transformed_data, mysql_schemas):
         pg_conn.close()
 
 
-def add_foreign_keys(pg_conn):
+def add_foreign_keys(pg_conn, schema_info=None):
     """
     Adds FK constraints after all data is loaded.
     Runs ALTER TABLE ADD CONSTRAINT for each relationship.
