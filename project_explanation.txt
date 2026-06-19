@@ -1,0 +1,120 @@
+================================================================================
+          VIDEO SCRIPT & PROJECT EXPLANATION: MYSQL TO POSTGRESQL MIGRATION
+================================================================================
+
+This document is designed as a script and visual guide to generate a walkthrough 
+video explaining the database migration pipeline. It is divided into scenes 
+with Visual Guides and spoken Narrator text.
+
+--------------------------------------------------------------------------------
+SCENE 1: INTRODUCTION & PROJECT GOAL
+--------------------------------------------------------------------------------
+[Visual Cue: Show a title card reading: "MySQL to PostgreSQL Database Migration
+Tool" followed by icons representing MySQL on the left and PostgreSQL on the right.]
+
+Narrator (Voiceover):
+"Welcome to this walkthrough of our MySQL to PostgreSQL Database Migration tool. 
+In enterprise systems, shifting from MySQL to PostgreSQL is common, but it comes 
+with critical hurdles. These include foreign key dependency order, data type 
+differences—such as JSON and UUIDs—and performance bottlenecks when moving large 
+volumes of records. Our tool addresses these issues by offering a robust, 
+multithreaded pipeline that automates schema extraction, transformation, loading, 
+and validation."
+
+--------------------------------------------------------------------------------
+SCENE 2: SYSTEM ARCHITECTURE & COMPONENTS
+--------------------------------------------------------------------------------
+[Visual Cue: Show a diagram displaying the workspace folders: config, utils, 
+migration, validation, and ui. Highlight the division between the user interface 
+and the background execution thread.]
+
+Narrator (Voiceover):
+"Let's look at how the project is structured. The project consists of five key folders:
+First, 'config'—which manages secure, credential-validated database connection pools.
+Second, 'utils'—which hosts the schema analyzer for mapping database structure.
+Third, 'migration'—where the core ETL—or Extract, Transform, and Load—logic resides.
+Fourth, 'validation'—which compares row counts after migration.
+And fifth, 'ui'—which contains a PyQt5-based GUI that keeps the user interface responsive by offloading the pipeline onto an asynchronous worker thread."
+
+--------------------------------------------------------------------------------
+SCENE 3: PIPELINE STEP 1 - SCHEMA ANALYSIS
+--------------------------------------------------------------------------------
+[Visual Cue: Zoom in on a flowchart showing a Topological Dependency Graph sorting 
+parent and child tables.]
+
+Narrator (Voiceover):
+"The migration begins with Step 1: Schema Analysis. Because databases enforce 
+referential integrity, child tables cannot be loaded before parent tables. 
+Our tool solves this by reading the Foreign Key graph from MySQL using SQLAlchemy 
+inspectors, and feeding them to Python’s TopologicalSorter. This arranges all 100 
+tables into a perfect migration sequence. Simultaneously, the analyzer scans 
+columns to detect special data types, including UUID primary keys, JSON arrays, 
+and boolean flags stored as MySQL Tinyints."
+
+--------------------------------------------------------------------------------
+SCENE 4: PIPELINE STEP 2 - CHUNKED DATA EXTRACTION
+--------------------------------------------------------------------------------
+[Visual Cue: Show database logs printing: 'Extracting rows from tables... chunk 1... 
+chunk 2...']
+
+Narrator (Voiceover):
+"In Step 2, we perform chunked data extraction. Loading one million rows 
+simultaneously into system memory can cause memory exhaustion. To prevent this, 
+the extractor reads MySQL data using Pandas chunking. Data is extracted in batches 
+of 1,000 rows, ensuring a low memory footprint and high stability."
+
+--------------------------------------------------------------------------------
+SCENE 5: PIPELINE STEP 3 - DATA TRANSFORMATION
+--------------------------------------------------------------------------------
+[Visual Cue: Display code snippets mapping data types: JSON String to Python Dict, 
+and Tinyint to Boolean.]
+
+Narrator (Voiceover):
+"Step 3 is Data Transformation. Databases store data differently. 
+The transformer normalizes MySQL formats to match PostgreSQL expectations:
+- First, JSON strings are parsed into Python dictionary structures so the driver can map them to native PostgreSQL JSONB columns.
+- Second, MySQL Tinyint values are mapped to native PostgreSQL Booleans.
+- Third, primary key strings in UUID tables are validated and normalized."
+
+--------------------------------------------------------------------------------
+SCENE 6: PIPELINE STEP 4 - BULK LOADING & SEQUENCE RESET
+--------------------------------------------------------------------------------
+[Visual Cue: Show PostgreSQL logs printing: 'session_replication_role = replica' 
+followed by bulk insert confirmation logs.]
+
+Narrator (Voiceover):
+"Step 4 handles the data load. To achieve maximum throughput, the loader temporarily 
+sets the session replication role to 'replica'. This disables foreign key check 
+triggers on the PostgreSQL destination during the load. The tables are generated, 
+and records are bulk-inserted using psycopg2's 'execute_values'. Once the bulk 
+load completes, serial sequences are reset to match the highest auto-increment 
+keys, and the session role is restored to default before re-applying the 
+Foreign Key constraints."
+
+--------------------------------------------------------------------------------
+SCENE 7: PIPELINE STEP 5 - VALIDATION & REPORTS
+--------------------------------------------------------------------------------
+[Visual Cue: Show a preview of the validation table with 100% success rate and 
+the generated validation_report.csv file.]
+
+Narrator (Voiceover):
+"Step 5 is Validation. The validator queries the exact row counts from both databases 
+and performs a final integrity check. The validation summary is logged, and a 
+detailed CSV report is exported. This gives developers a full audit trail 
+confirming that all one million rows migrated successfully with zero mismatches."
+
+--------------------------------------------------------------------------------
+SCENE 8: TECHNICAL HIGHLIGHTS & WRAP-UP
+--------------------------------------------------------------------------------
+[Visual Cue: Show the clean, single-window PyQt5 application running, starting from 
+entering credentials to the progress bar reaching 100%.]
+
+Narrator (Voiceover):
+"To ensure UI stability, we implemented two key enhancements:
+First, we decoupled the database operations from PyQt's main thread using a QThread 
+Migration Worker.
+Second, we resolved thread-level driver conflicts on Windows by forcing the MySQL 
+engine into pure Python mode, preventing driver crashes.
+The result is a clean, single-window interface that delivers high-performance 
+migrations at the click of a button. Thank you for watching!"
+================================================================================
