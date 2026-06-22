@@ -10,17 +10,19 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from parent directory .env
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dotenv_path = os.path.join(script_dir, "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
 
 fake = Faker()
 
 MYSQL_CONFIG = {
-    "host": os.getenv("MYSQL_HOST", "localhost"),
-    "port": int(os.getenv("MYSQL_PORT", 3306)),
-    "user": os.getenv("MYSQL_USER", "root"),
-    "password": os.getenv("MYSQL_PASSWORD", "1234"),
-    "database": os.getenv("MYSQL_DATABASE", "migration_db"),
+    "host": os.getenv("MYSQL_HOST"),
+    "port": int(os.getenv("MYSQL_PORT")),
+    "user": os.getenv("MYSQL_USER"),
+    "password": os.getenv("MYSQL_PASSWORD"),
+    "database": os.getenv("MYSQL_DATABASE"),
 }
 
 ROWS_PER_TABLE = 10_000  # ~1M total across 100 tables
@@ -37,6 +39,23 @@ def connect_db():
             database=MYSQL_CONFIG["database"]
         )
         return conn
+    except mysql.connector.Error as err:
+        if err.errno == 1049: # Unknown database
+            try:
+                # Try connecting without database first so we can create it
+                conn = mysql.connector.connect(
+                    host=MYSQL_CONFIG["host"],
+                    port=MYSQL_CONFIG["port"],
+                    user=MYSQL_CONFIG["user"],
+                    password=MYSQL_CONFIG["password"]
+                )
+                return conn
+            except Exception as e:
+                print(f"[FAIL] Connection to MySQL failed: {e}")
+                raise e
+        else:
+            print(f"[FAIL] Connection to MySQL failed: {err}")
+            raise err
     except Exception as e:
         print(f"[FAIL] Connection to MySQL failed: {e}")
         raise e
@@ -64,6 +83,9 @@ def check_and_initialize_schema(conn):
             schema_path = os.path.join(script_dir, "schema.sql")
             with open(schema_path, "r", encoding="utf-8") as f:
                 sql = f.read()
+            
+            # Replace hardcoded database names with the configured database name
+            sql = sql.replace("migration_db", MYSQL_CONFIG["database"])
             
             # Split SQL file by semicolons, filtering out comments and empty statements
             statements = []
@@ -1679,6 +1701,9 @@ def main():
     conn = None
     try:
         conn = connect_db()
+
+        # Initialize/verify schema and tables first
+        check_and_initialize_schema(conn)
 
         # Step 1: Clean existing data in correct dependency order
         print("\nStep 1: Truncating existing tables...")

@@ -184,6 +184,6 @@ if __name__ == "__main__":
     success = run_validation()
     
     if success:
-        print("\n✓ Migration validated successfully")
+        print("\n[OK] Migration validated successfully")
     else:
-        print("\n✗ Validation failed - check report")
+        print("\n[FAIL] Validation failed - check report")
