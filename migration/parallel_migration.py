@@ -4,6 +4,8 @@ import logging
 import time
 import concurrent.futures
 import threading
+import json
+import tempfile
 from datetime import datetime
 
 # Ensure the project root is in the Python search path.
@@ -14,11 +16,13 @@ if project_root not in sys.path:
 from utils.schema_analyzer import analyze_schema
 from migration.extract import extract_table_data, get_table_schema
 from migration.transformer import transform_table
-from migration.loader import load_table, add_foreign_keys
+from migration.loader import load_table, add_foreign_keys, ConnectionHolder, RetryTracker, execute_with_retry
 from validation.Validate import run_validation
 from config.db_config import get_postgres_connection
 from utils.logger import setup_logger
 import config
+
+logger = logging.getLogger("migration")
 
 class WorkerIdMapper:
     _lock = threading.Lock()
@@ -36,6 +40,111 @@ class WorkerIdMapper:
                     cls._mapping[ident] = f"Worker-{cls._counter}"
                     cls._counter += 1
             return cls._mapping[ident]
+
+class CheckpointManager:
+    _lock = threading.Lock()
+    _file_existed = None
+
+    @classmethod
+    def load_checkpoint(cls, current_migration_order):
+        """
+        Loads and validates the checkpoint file.
+        Returns a dictionary representing checkpoint data, or None if no valid checkpoint is found.
+        """
+        # If FORCE_FRESH_MIGRATION is enabled, ignore checkpoint
+        if getattr(config, "FORCE_FRESH_MIGRATION", False):
+            logger.info("FORCE_FRESH_MIGRATION is enabled. Ignoring existing checkpoint.")
+            return None
+
+        if not getattr(config, "ENABLE_CHECKPOINT", True):
+            return None
+
+        checkpoint_path = config.CHECKPOINT_FILE
+        if not os.path.exists(checkpoint_path):
+            return None
+
+        with cls._lock:
+            try:
+                with open(checkpoint_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Validate metadata keys
+                if not isinstance(data, dict) or "completed_tables" not in data:
+                    logger.warning("Checkpoint file has invalid structure. Starting a fresh migration.")
+                    return None
+                
+                completed_tables = data["completed_tables"]
+                # Validate and ignore unknown tables
+                unknown_tables = [t for t in completed_tables if t not in current_migration_order]
+                if unknown_tables:
+                    logger.warning(f"Checkpoint contains unknown tables not present in the current migration order: {unknown_tables}")
+                    logger.warning("Checkpoint appears incompatible. Unknown tables will be ignored.")
+                
+                logger.info("Checkpoint Loaded")
+                return data
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(f"Corrupted or invalid checkpoint JSON file: {e}. Starting a fresh migration.")
+                return None
+
+    @classmethod
+    def write_checkpoint(cls, migration_id, completed_tables):
+        """
+        Atomically writes checkpoint data and metadata to config.CHECKPOINT_FILE.
+        Uses a temporary file and os.replace().
+        """
+        if not getattr(config, "ENABLE_CHECKPOINT", True):
+            return
+
+        with cls._lock:
+            try:
+                checkpoint_path = config.CHECKPOINT_FILE
+                temp_dir = os.path.dirname(os.path.abspath(checkpoint_path))
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # Determine creation status
+                if cls._file_existed is None:
+                    cls._file_existed = os.path.exists(checkpoint_path)
+
+                checkpoint_data = {
+                    "migration_id": migration_id,
+                    "creation_timestamp": datetime.now().isoformat(),
+                    "completed_tables": completed_tables
+                }
+
+                # Atomic write: write to temp file, flush, fsync, close, replace
+                with tempfile.NamedTemporaryFile("w", dir=temp_dir, delete=False, encoding="utf-8") as temp_f:
+                    json.dump(checkpoint_data, temp_f, indent=4)
+                    temp_f.flush()
+                    os.fsync(temp_f.fileno())
+                    temp_filepath = temp_f.name
+
+                os.replace(temp_filepath, checkpoint_path)
+                
+                if not cls._file_existed:
+                    logger.info("Checkpoint Created")
+                    cls._file_existed = True
+                else:
+                    logger.info("Checkpoint Updated")
+            except Exception as e:
+                logger.error(f"Failed to write checkpoint atomically: {e}")
+
+    @classmethod
+    def remove_checkpoint(cls):
+        """
+        Safely removes the checkpoint file.
+        """
+        if not getattr(config, "ENABLE_CHECKPOINT", True):
+            return
+
+        with cls._lock:
+            checkpoint_path = config.CHECKPOINT_FILE
+            if os.path.exists(checkpoint_path):
+                try:
+                    os.remove(checkpoint_path)
+                    logger.info("Checkpoint Removed")
+                    cls._file_existed = False
+                except Exception as e:
+                    logger.error(f"Failed to remove checkpoint file: {e}")
 
 class ParallelMigrationManager:
     def __init__(self, max_workers=None):
@@ -84,7 +193,6 @@ class ParallelMigrationManager:
         Creates a dedicated PostgreSQL connection, disables FK enforcement for that session,
         executes the table-processing ETL stages, restores FK enforcement, and closes the connection.
         """
-        logger = logging.getLogger("migration")
         worker_id = WorkerIdMapper.get_worker_id()
         
         start_time = time.perf_counter()
@@ -93,13 +201,14 @@ class ParallelMigrationManager:
         try:
             logger.info(f"[{worker_id}] [{table_name}] Started")
             
-            # 1. Create connection
+            # 1. Create connection and wrap it in a ConnectionHolder
             pg_conn = get_postgres_connection()
+            conn_holder = ConnectionHolder(pg_conn)
             
             # 2. Disable FK enforcement on this connection/session
-            cursor = pg_conn.cursor()
+            cursor = conn_holder.conn.cursor()
             cursor.execute("SET session_replication_role = replica;")
-            pg_conn.commit()
+            conn_holder.conn.commit()
             cursor.close()
             fk_disabled = True
             logger.info(f"[{worker_id}] [{table_name}] FK constraints disabled for bulk load")
@@ -120,12 +229,12 @@ class ParallelMigrationManager:
             except StopIteration:
                 # Table is empty, create schema structure only without DataFrame inserts
                 logger.info(f"[{worker_id}] [{table_name}] Table is empty, creating structure only")
-                self._load(pg_conn, table_name, None, schema, is_first_chunk=True, is_last_chunk=True, chunk_number=0)
+                self._load(conn_holder, table_name, None, schema, is_first_chunk=True, is_last_chunk=True, chunk_number=0)
                 
                 # Restore FK and exit
-                cursor = pg_conn.cursor()
+                cursor = conn_holder.conn.cursor()
                 cursor.execute("SET session_replication_role = DEFAULT;")
-                pg_conn.commit()
+                conn_holder.conn.commit()
                 cursor.close()
                 fk_disabled = False
                 
@@ -158,7 +267,7 @@ class ParallelMigrationManager:
                 transformed_chunk = self._transform(current_chunk, table_name)
                 logger.info(f"[{worker_id}] [{table_name}] Transform Complete")
                 
-                rows = self._load(pg_conn, table_name, transformed_chunk, schema, 
+                rows = self._load(conn_holder, table_name, transformed_chunk, schema, 
                                   is_first_chunk=is_first, is_last_chunk=is_last, chunk_number=chunk_count)
                 total_rows_loaded += rows
                 logger.info(f"[{worker_id}] [{table_name}] Load Complete")
@@ -173,9 +282,9 @@ class ParallelMigrationManager:
                 chunk_sizes.append(len(next_chunk))
 
             # 4. Restore FK enforcement on this connection/session
-            cursor = pg_conn.cursor()
+            cursor = conn_holder.conn.cursor()
             cursor.execute("SET session_replication_role = DEFAULT;")
-            pg_conn.commit()
+            conn_holder.conn.commit()
             cursor.close()
             fk_disabled = False
             logger.info(f"[{worker_id}] [{table_name}] FK constraints re-enabled")
@@ -219,17 +328,17 @@ class ParallelMigrationManager:
                 "average_chunk_size": 0.0
             }
         finally:
-            if pg_conn:
+            if 'conn_holder' in locals() and conn_holder.conn:
                 if fk_disabled:
                     try:
-                        cursor = pg_conn.cursor()
+                        cursor = conn_holder.conn.cursor()
                         cursor.execute("SET session_replication_role = DEFAULT;")
-                        pg_conn.commit()
+                        conn_holder.conn.commit()
                         cursor.close()
                         logger.info(f"[{worker_id}] [{table_name}] FK constraints re-enabled in finally block")
                     except Exception as ex:
                         logger.error(f"[{worker_id}] [{table_name}] Failed to restore FK constraints in finally block: {ex}")
-                pg_conn.close()
+                conn_holder.conn.close()
 
     def run(self):
         """
@@ -285,49 +394,70 @@ class ParallelMigrationManager:
         print(f"Boolean column tables detected: {len(self.schema_info['boolean_columns'])}")
         print("="*50)
 
+        # Load Checkpoint and Filter completed tables
+        checkpoint_data = CheckpointManager.load_checkpoint(self.schema_info["migration_order"])
+        completed_tables_tracker = {}
+        
+        if checkpoint_data:
+            completed_tables_tracker = checkpoint_data.get("completed_tables", {})
+            skipped_tables = [t for t in self.schema_info["migration_order"] if completed_tables_tracker.get(t) == "completed"]
+            remaining_tables = [t for t in self.schema_info["migration_order"] if completed_tables_tracker.get(t) != "completed"]
+            
+            logger.info(f"Skipped Tables: {len(skipped_tables)} {skipped_tables}")
+            logger.info(f"Remaining Tables: {len(remaining_tables)} {remaining_tables}")
+            if skipped_tables:
+                logger.info("Migration Resumed")
+        else:
+            skipped_tables = []
+            remaining_tables = list(self.schema_info["migration_order"])
+
         # Determine thread pool size
-        total_tables = len(self.schema_info["migration_order"])
-        pool_size = min(self.max_workers, total_tables)
+        total_tables = len(remaining_tables)
+        pool_size = min(self.max_workers, max(1, total_tables))
         logger.info(f"Worker Pool Created with {pool_size} workers")
 
         total_rows = 0
         failed_tables = []
         table_statistics = []
 
-        # Execute workers concurrently
-        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
-            futures = {
-                executor.submit(self._process_table, table_name): table_name
-                for table_name in self.schema_info["migration_order"]
-            }
+        if total_tables > 0:
+            # Execute workers concurrently
+            with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
+                futures = {
+                    executor.submit(self._process_table, table_name): table_name
+                    for table_name in remaining_tables
+                }
 
-            completed_count = 0
-            for future in concurrent.futures.as_completed(futures):
-                table_name = futures[future]
-                completed_count += 1
-                if config.ENABLE_PROGRESS_REPORT:
-                    print(f"Completed {completed_count}/{total_tables} tables")
-                
-                try:
-                    stats = future.result()
-                    table_statistics.append(stats)
-                    if stats["success"]:
-                        total_rows += stats["rows"]
-                    else:
+                completed_count = 0
+                for future in concurrent.futures.as_completed(futures):
+                    table_name = futures[future]
+                    completed_count += 1
+                    if config.ENABLE_PROGRESS_REPORT:
+                        print(f"Completed {completed_count}/{total_tables} tables")
+                    
+                    try:
+                        stats = future.result()
+                        table_statistics.append(stats)
+                        if stats["success"]:
+                            total_rows += stats["rows"]
+                            # Update Checkpoint atomically
+                            completed_tables_tracker[table_name] = "completed"
+                            CheckpointManager.write_checkpoint(migration_id, completed_tables_tracker)
+                        else:
+                            failed_tables.append(table_name)
+                    except Exception as e:
+                        logger.error(f"Worker thread for table {table_name} generated an unhandled exception: {e}")
                         failed_tables.append(table_name)
-                except Exception as e:
-                    logger.error(f"Worker thread for table {table_name} generated an unhandled exception: {e}")
-                    failed_tables.append(table_name)
-                    table_statistics.append({
-                        "table": table_name,
-                        "success": False,
-                        "rows": 0,
-                        "duration": 0.0,
-                        "error": str(e),
-                        "chunks_processed": 0,
-                        "largest_chunk_size": 0,
-                        "average_chunk_size": 0.0
-                    })
+                        table_statistics.append({
+                            "table": table_name,
+                            "success": False,
+                            "rows": 0,
+                            "duration": 0.0,
+                            "error": str(e),
+                            "chunks_processed": 0,
+                            "largest_chunk_size": 0,
+                            "average_chunk_size": 0.0
+                        })
 
         logger.info(
             f"Bulk load complete. "
@@ -337,17 +467,20 @@ class ParallelMigrationManager:
         if failed_tables:
             logger.warning(f"Failed tables: {failed_tables}")
 
-        # Post-process: Add foreign keys on a single connection
+        # Post-process: Add foreign keys on a single connection wrapped with retry helper
         main_conn = get_postgres_connection()
         try:
             logger.info("Foreign Keys Started")
             print("\n--- Adding Foreign Key Constraints ---")
-            fk_success, fk_failed = add_foreign_keys(main_conn, self.schema_info)
+            fk_success, fk_failed = execute_with_retry(add_foreign_keys, "ADD FOREIGN KEY", main_conn, self.schema_info)
             print(f"FK constraints added: {fk_success}")
             print(f"FK constraints failed: {len(fk_failed)}")
             logger.info("Foreign Keys Complete")
         finally:
-            main_conn.close()
+            try:
+                main_conn.close()
+            except Exception:
+                pass
 
         # Step 5: Validate
         success = True
@@ -392,8 +525,20 @@ class ParallelMigrationManager:
             print("="*48 + "\n")
             print(f"Workers Used        : {pool_size}\n")
             print(f"Loading Strategy    : {strategy_str}\n")
+            
+            # Checkpoint metrics
+            print(f"Tables Resumed      : {'Yes' if len(skipped_tables) > 0 else 'No'}")
+            print(f"Tables Skipped      : {len(skipped_tables)}")
+            print(f"Tables Executed     : {len(remaining_tables)}\n")
+
             print(f"Tables Migrated     : {success_tables_count}")
             print(f"Failed Tables       : {failed_tables_count}\n")
+            
+            # Retry metrics
+            print(f"Retry Count         : {RetryTracker.retry_count}")
+            print(f"Recovered Failures  : {RetryTracker.recovered_failures}")
+            print(f"Permanent Failures  : {RetryTracker.permanent_failures}\n")
+            
             print(f"Rows Migrated       : {total_rows:,}\n")
             print(f"Total Time          : {pipeline_duration:.2f} sec\n")
             print(f"Average/Table       : {avg_duration:.2f} sec\n")
@@ -411,6 +556,14 @@ class ParallelMigrationManager:
             logger.info("================================================")
             logger.info(f"Workers             : {pool_size}")
             logger.info(f"Loading Strategy    : {strategy_str}")
+            logger.info(f"Tables Resumed      : {'Yes' if len(skipped_tables) > 0 else 'No'}")
+            logger.info(f"Tables Skipped      : {len(skipped_tables)}")
+            logger.info(f"Tables Executed     : {len(remaining_tables)}")
+            logger.info(f"Tables Migrated     : {success_tables_count}")
+            logger.info(f"Failed Tables       : {failed_tables_count}")
+            logger.info(f"Retry Count         : {RetryTracker.retry_count}")
+            logger.info(f"Recovered Failures  : {RetryTracker.recovered_failures}")
+            logger.info(f"Permanent Failures  : {RetryTracker.permanent_failures}")
             logger.info(f"Rows Migrated       : {total_rows}")
             logger.info(f"Pipeline Duration   : {pipeline_duration:.2f} sec")
             logger.info(f"Throughput          : {throughput:,.2f} rows/sec")
@@ -432,14 +585,18 @@ class ParallelMigrationManager:
             for i, stats in enumerate(sorted_stats[:config.TOP_SLOW_TABLE_COUNT], 1):
                 logger.info(f"  {i}. {stats['table']} ({stats['duration']:.2f} sec)")
 
+        # Clean checkpoint file on successful completion
+        if len(failed_tables) == 0 and (not config.ENABLE_VALIDATION or success):
+            CheckpointManager.remove_checkpoint()
+
         # Log Final Summary to log file
         logger.info("================================================")
         logger.info("FINAL SUMMARY")
         logger.info("================================================")
-        logger.info(f"Migration Status    : {'SUCCESS' if failed_tables_count == 0 else 'FAILED'}")
+        logger.info(f"Migration Status    : {'SUCCESS' if len(failed_tables) == 0 else 'FAILED'}")
         logger.info(f"Migration ID        : {migration_id}")
         logger.info(f"Successful Tables   : {success_tables_count}")
-        logger.info(f"Failed Tables       : {failed_tables_count}")
+        logger.info(f"Failed Tables       : {len(failed_tables)}")
         logger.info(f"Rows Migrated       : {total_rows}")
         logger.info(f"Duration            : {pipeline_duration:.2f} sec")
         logger.info(f"Validation Result   : {'PASSED' if (not config.ENABLE_VALIDATION or success) else 'FAILED'}")

@@ -50,3 +50,15 @@ DEBUG = False
 
 # Enable/disable using PostgreSQL COPY protocol for loading data
 USE_POSTGRES_COPY = True
+
+# Retry mechanism configuration
+ENABLE_RETRY = True
+MAX_RETRY_ATTEMPTS = 3
+RETRY_INITIAL_DELAY = 1
+RETRY_BACKOFF_FACTOR = 2
+
+# Checkpoint & Resume configuration
+ENABLE_CHECKPOINT = True
+AUTO_RESUME = True
+CHECKPOINT_FILE = "migration_checkpoint.json"
+FORCE_FRESH_MIGRATION = False

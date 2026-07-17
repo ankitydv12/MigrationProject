@@ -9,6 +9,7 @@ import numpy as np
 import json
 import io
 import time
+import threading
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
@@ -35,6 +36,95 @@ from sqlalchemy.dialects.mysql import (
     DATETIME, DATE,
     DECIMAL, FLOAT, JSON
 )
+
+class RetryTracker:
+    _lock = threading.Lock()
+    retry_count = 0
+    recovered_failures = 0
+    permanent_failures = 0
+
+    @classmethod
+    def record_retry(cls):
+        with cls._lock:
+            cls.retry_count += 1
+
+    @classmethod
+    def record_recovery(cls):
+        with cls._lock:
+            cls.recovered_failures += 1
+
+    @classmethod
+    def record_permanent_failure(cls):
+        with cls._lock:
+            cls.permanent_failures += 1
+
+class ConnectionHolder:
+    def __init__(self, conn):
+        self.conn = conn
+
+def recreate_connection(conn_holder):
+    """
+    Safely closes the old connection and creates a new one,
+    disabling FK checks on the new connection/session.
+    """
+    try:
+        conn_holder.conn.close()
+    except Exception:
+        pass
+    new_conn = get_postgres_connection()
+    cursor = new_conn.cursor()
+    cursor.execute("SET session_replication_role = replica;")
+    new_conn.commit()
+    cursor.close()
+    conn_holder.conn = new_conn
+
+def execute_with_retry(operation, op_name, pg_conn_or_holder, *args, **kwargs):
+    """
+    Executes an operation with retry logic for transient database failures.
+    Automatically handles connection recreation if pg_conn_or_holder is a ConnectionHolder.
+    """
+    import config
+    
+    enable_retry = getattr(config, "ENABLE_RETRY", True)
+    max_attempts = getattr(config, "MAX_RETRY_ATTEMPTS", 3)
+    initial_delay = getattr(config, "RETRY_INITIAL_DELAY", 1)
+    backoff_factor = getattr(config, "RETRY_BACKOFF_FACTOR", 2)
+    
+    if not enable_retry:
+        conn = pg_conn_or_holder.conn if isinstance(pg_conn_or_holder, ConnectionHolder) else pg_conn_or_holder
+        return operation(conn, *args, **kwargs)
+        
+    transient_errors = (
+        psycopg2.OperationalError,
+        psycopg2.InterfaceError,
+        ConnectionError,
+        TimeoutError
+    )
+    
+    delay = initial_delay
+    conn_holder = pg_conn_or_holder if isinstance(pg_conn_or_holder, ConnectionHolder) else ConnectionHolder(pg_conn_or_holder)
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = operation(conn_holder.conn, *args, **kwargs)
+            if attempt > 1:
+                RetryTracker.record_recovery()
+                logger.info(f"[{op_name}] Final Success on attempt {attempt}/{max_attempts}")
+            return result
+        except transient_errors as e:
+            if attempt == max_attempts:
+                RetryTracker.record_permanent_failure()
+                logger.error(f"[{op_name}] Final Failure on attempt {attempt}/{max_attempts}: {e}")
+                raise
+                
+            RetryTracker.record_retry()
+            logger.warning(f"[{op_name}] Failed")
+            logger.warning(f"[{op_name}] Retry {attempt}/{max_attempts}")
+            logger.warning(f"[{op_name}] Waiting {delay} sec")
+            
+            recreate_connection(conn_holder)
+            time.sleep(delay)
+            delay *= backoff_factor
 
 def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
     """
@@ -195,7 +285,7 @@ def prepare_copy_buffer(df):
     return csv_buffer
 
 
-def insert_table_data(pg_conn, table_name, df, chunk_number=1):
+def insert_table_data(conn_holder, table_name, df, chunk_number=1):
     """
     Inserts DataFrame into PostgreSQL table.
     Uses COPY FROM STDIN or falls back to execute_values based on config.
@@ -206,60 +296,47 @@ def insert_table_data(pg_conn, table_name, df, chunk_number=1):
     
     import config
     use_copy = getattr(config, "USE_POSTGRES_COPY", True)
-    cursor = pg_conn.cursor()
     
-    try:
-        if use_copy:
+    if use_copy:
+        csv_buffer = prepare_copy_buffer(df)
+        columns_str = ", ".join(f'"{col}"' for col in df.columns)
+        copy_sql = f'COPY "{table_name}" ({columns_str}) FROM STDIN WITH CSV NULL \'\\N\''
+        
+        def run_copy(conn):
             logger.info(f"[{table_name}] COPY Started | Chunk: {chunk_number}")
-            
-            # 1. Prepare copy buffer (isolated logic)
-            csv_buffer = prepare_copy_buffer(df)
-            
-            # 2. Build quoted SQL identifiers
-            columns_str = ", ".join(f'"{col}"' for col in df.columns)
-            copy_sql = f'COPY "{table_name}" ({columns_str}) FROM STDIN WITH CSV NULL \'\\N\''
-            
-            # 3. Measure only database loading time
-            start_time = time.perf_counter()
-            cursor.copy_expert(copy_sql, csv_buffer)
-            duration = time.perf_counter() - start_time
-            
-            pg_conn.commit()
-            
-            # 4. Log chunk throughput
-            rows_sec = len(df) / duration if duration > 0 else 0.0
-            logger.info(f"[{table_name}] COPY Completed | Chunk: {chunk_number} | Rows Loaded: {len(df)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            cursor = conn.cursor()
+            try:
+                start_time = time.perf_counter()
+                cursor.copy_expert(copy_sql, csv_buffer)
+                duration = time.perf_counter() - start_time
+                conn.commit()
+                rows_sec = len(df) / duration if duration > 0 else 0.0
+                logger.info(f"[{table_name}] COPY Completed | Chunk: {chunk_number} | Rows Loaded: {len(df)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            finally:
+                cursor.close()
             return len(df)
-        else:
+            
+        return execute_with_retry(run_copy, f"{table_name} COPY", conn_holder)
+    else:
+        records = prepare_records(df, table_name)
+        columns_str = ", ".join(f'"{col}"' for col in df.columns)
+        insert_sql = f'INSERT INTO "{table_name}" ({columns_str}) VALUES %s'
+        
+        def run_insert(conn):
             logger.info(f"[{table_name}] INSERT Started (execute_values) | Chunk: {chunk_number}")
-            
-            # 1. Prepare records for insert
-            records = prepare_records(df, table_name)
-            
-            # 2. Build quoted SQL identifiers
-            columns_str = ", ".join(f'"{col}"' for col in df.columns)
-            insert_sql = f'INSERT INTO "{table_name}" ({columns_str}) VALUES %s'
-            
-            # 3. Measure only database loading time
-            start_time = time.perf_counter()
-            execute_values(cursor, insert_sql, records, page_size=1000)
-            duration = time.perf_counter() - start_time
-            
-            pg_conn.commit()
-            
-            # 4. Log chunk throughput
-            rows_sec = len(records) / duration if duration > 0 else 0.0
-            logger.info(f"[{table_name}] INSERT Completed (execute_values) | Chunk: {chunk_number} | Rows Loaded: {len(records)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            cursor = conn.cursor()
+            try:
+                start_time = time.perf_counter()
+                execute_values(cursor, insert_sql, records, page_size=1000)
+                duration = time.perf_counter() - start_time
+                conn.commit()
+                rows_sec = len(records) / duration if duration > 0 else 0.0
+                logger.info(f"[{table_name}] INSERT Completed (execute_values) | Chunk: {chunk_number} | Rows Loaded: {len(records)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            finally:
+                cursor.close()
             return len(records)
             
-    except Exception as e:
-        pg_conn.rollback()
-        # Raise exception directly without automatic fallback
-        strategy = "COPY" if use_copy else "execute_values"
-        logger.error(f"[{table_name}] Load failed using {strategy}: {e}")
-        raise
-    finally:
-        cursor.close()
+        return execute_with_retry(run_insert, f"{table_name} INSERT", conn_holder)
 
 def prepare_records(df, table_name):
     """
@@ -340,12 +417,13 @@ def reset_sequence(pg_conn, table_name, pk_column="id"):
     except Exception as e:
         pg_conn.rollback()
         logger.error(f"Failed to reset sequence for {table_name}: {e}")
+        raise
         
     finally:
         cursor.close()
 
 
-def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_first_chunk=True, is_last_chunk=True, chunk_number=1):
+def load_table(pg_conn_or_holder, table_name, df, mysql_schema, schema_info_arg=None, is_first_chunk=True, is_last_chunk=True, chunk_number=1):
     """
     Complete load process for one table / chunk.
     1. Create table in PostgreSQL (on first chunk)
@@ -358,24 +436,27 @@ def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_f
     else:
         _init_schema_info()
 
+    # Wrap connection in holder
+    conn_holder = pg_conn_or_holder if isinstance(pg_conn_or_holder, ConnectionHolder) else ConnectionHolder(pg_conn_or_holder)
+
     # Step 1: create the table in PostgreSQL on first chunk
     if is_first_chunk:
-        create_postgres_table(pg_conn, table_name, mysql_schema)
+        execute_with_retry(create_postgres_table, f"{table_name} CREATE TABLE", conn_holder, table_name, mysql_schema)
 
     # Step 2: insert transformed data if it is not None/empty
     row_count = 0
     if df is not None and not df.empty:
-        row_count = insert_table_data(pg_conn, table_name, df, chunk_number=chunk_number)
+        row_count = insert_table_data(conn_holder, table_name, df, chunk_number=chunk_number)
 
     # Step 3: reset sequence only for non UUID tables on last chunk
     if is_last_chunk:
         if schema_info and "uuid_tables" in schema_info:
             if table_name not in schema_info["uuid_tables"]:
-                reset_sequence(pg_conn, table_name)
+                execute_with_retry(reset_sequence, f"{table_name} RESET SEQUENCE", conn_holder, table_name)
         else:
             _init_schema_info()
             if table_name not in schema_info["uuid_tables"]:
-                reset_sequence(pg_conn, table_name)
+                execute_with_retry(reset_sequence, f"{table_name} RESET SEQUENCE", conn_holder, table_name)
 
     return row_count
 
@@ -485,6 +566,7 @@ def add_foreign_keys(pg_conn, schema_info_arg=None):
                 logger.warning(
                     f"FK failed: {constraint_name} | {e}"
                 )
+                raise
     
     finally:
         cursor.close()
