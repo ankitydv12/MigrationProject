@@ -1,43 +1,31 @@
-"""
-load_all_tables()
-    │
-    ├── SET session_replication_role = replica
-    │
-    ├── For every table in migration_order:
-    │       │
-    │       └── load_table()
-    │               │
-    │               ├── create_postgres_table()
-    │               │       └── map_mysql_type_to_postgres()
-    │               │
-    │               ├── prepare_records()
-    │               │
-    │               ├── insert_table_data()
-    │               │
-    │               └── reset_sequence()
-    │
-    ├── SET session_replication_role = DEFAULT
-    │
-    ├── add_foreign_keys()
-    │
-    └── Return total_rows, failed_tables
-"""
-
-
 import psycopg2
 import sys
 import os
+import logging
+from sqlalchemy import inspect
+from psycopg2.extras import execute_values
+import pandas as pd
+import numpy as np
+import json
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 
 from config.db_config import get_postgres_connection, get_mysql_engine
-from sqlalchemy import inspect
-import logging
 from utils.schema_analyzer import analyze_schema
 
 logger = logging.getLogger(__name__)
-schema_info = analyze_schema()
+
+# Schema metadata is lazy-loaded or injected by ParallelMigrationManager
+schema_info = None
+
+def _init_schema_info():
+    """
+    Lazy-load schema information if it hasn't been set yet.
+    """
+    global schema_info
+    if schema_info is None:
+        schema_info = analyze_schema()
 
 from sqlalchemy.dialects.mysql import (
     INTEGER, BIGINT, SMALLINT, TINYINT,
@@ -54,6 +42,7 @@ def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
     mysql_type comes from inspector.get_columns()
     which returns SQLAlchemy type objects.
     """
+    _init_schema_info()
     
     # convert type object to string for easy comparison
     type_str = str(mysql_type).upper()
@@ -82,7 +71,6 @@ def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
     
     # String types
     if "VARCHAR" in type_str:
-        # extract length from VARCHAR(100) → VARCHAR(100)
         return type_str.replace("VARCHAR", "VARCHAR")
     if "LONGTEXT" in type_str:
         return "TEXT"
@@ -99,139 +87,80 @@ def map_mysql_type_to_postgres(mysql_type, table_name, col_name):
     if "DECIMAL" in type_str or "NUMERIC" in type_str:
         return type_str.replace("DECIMAL", "NUMERIC")
     if "FLOAT" in type_str:
-        return "FLOAT"
+        return "DOUBLE PRECISION"
+    if "DOUBLE" in type_str:
+        return "DOUBLE PRECISION"
     
-    # default fallback
-    logger.warning(
-        f"Unknown type {type_str} in {table_name}.{col_name}"
-        f" defaulting to TEXT"
-    )
-    return "TEXT"
+    # Default fallback
+    return "VARCHAR(255)"
+
 
 def create_postgres_table(pg_conn, table_name, mysql_schema):
     """
-    Creates a table in PostgreSQL based on MySQL schema.
-    Drops table first if it already exists.
-    
-    mysql_schema comes from extract.get_table_schema()
-    mysql_schema = {
-    "table_name": "customers",
-
-    "columns": [
-        {
-            "name": "id",
-            "type": INTEGER(),
-            "nullable": False
-        },
-        {
-            "name": "name",
-            "type": VARCHAR(100),
-            "nullable": False
-        },
-        {
-            "name": "email",
-            "type": VARCHAR(255),
-            "nullable": True
-        }
-    ],
-
-    "primary_key": {
-        "constrained_columns": ["id"],
-        "name": "PRIMARY"
-    },
-
-    "foreign_keys": [
-        {
-            "constrained_columns": ["country_id"],
-            "referred_table": "countries",
-            "referred_columns": ["id"]
-        }
-    ]
-}
+    Creates table in PostgreSQL with correct types.
+    Drops table first if it exists.
     """
     cursor = pg_conn.cursor()
     
     try:
-        # Step 1: drop table if exists
-        # CASCADE drops dependent objects too
-        cursor.execute(
-            f"DROP TABLE IF EXISTS {table_name} CASCADE"
-        )
+        # Step 1: drop table if exists (clean start)
+        cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
+        pg_conn.commit()
         
-        # Step 2: build column definitions
-        columns = mysql_schema["columns"]
-        pk_cols = mysql_schema["primary_key"]["constrained_columns"]
-        
+        # Step 2: map columns to Postgres types
         col_definitions = []
-        for col in columns:
-            col_name = col["name"] #id 
-            pg_type  = map_mysql_type_to_postgres(
-                col["type"], table_name, col_name
-            )
-            """
-            Create Table student(
-            nameCOL = id , datatype = Int , key = primary key  ,
-            NameCOl = name , datatype varchar(100) , nullable = not null
-            mobile  no , int , null
-            )
-            """
-            # handle nullable
-            nullable = "NULL" if col["nullable"] else "NOT NULL"
+        for col in mysql_schema["columns"]:
+            col_name = col["name"]
+            mysql_type = col["type"]
             
-            # handle primary key with auto increment
-            if col_name in pk_cols:
-                if pg_type == "UUID":
-                    # UUID primary key
-                    col_def = (
-                        f"{col_name} UUID PRIMARY KEY"
-                    )
-                else:
-                    # integer primary key becomes SERIAL
-                    col_def = (
-                        f"{col_name} SERIAL PRIMARY KEY"
-                    )
-            else:
-                col_def = f"{col_name} {pg_type} {nullable}"
+            # map type
+            pg_type = map_mysql_type_to_postgres(
+                mysql_type, 
+                table_name, 
+                col_name
+            )
             
-            col_definitions.append(col_def)
-            #col_defination = id UUID Primary Key
-            #col_defination = id Serial Primary Key
-            ##col_defination = id Integer NOT NULL
-        
-        # Step 3: build CREATE TABLE statement
+            # handle NULL/NOT NULL constraint
+            nullable_str = "" if col["nullable"] else " NOT NULL"
+            
+            # handle primary key (simple id columns)
+            pk_str = ""
+            if col_name == "id":
+                pk_str = " PRIMARY KEY"
+                
+            col_definitions.append(
+                f"{col_name} {pg_type}{nullable_str}{pk_str}"
+            )
+            
+        # Step 3: build CREATE TABLE SQL
         cols_sql = ",\n    ".join(col_definitions)
-        create_sql = (
-            f"CREATE TABLE {table_name} (\n"
-            f"    {cols_sql}\n"
-            f");"
-        )
-        #print(create_sql)
+        create_sql = f"""
+            CREATE TABLE {table_name} (
+                {cols_sql}
+            );
+        """
         
-        logger.info(f"Creating table: {table_name}")
+        # Step 4: execute CREATE TABLE
         cursor.execute(create_sql)
         pg_conn.commit()
-        logger.info(f"Table created: {table_name}")
+        logger.info(f"Created table in PostgreSQL: {table_name}")
         
     except Exception as e:
         pg_conn.rollback()
-        logger.error(f"Failed to create {table_name}: {e}")
+        logger.error(f"Failed to create table {table_name}: {e}")
         raise
-    
+        
     finally:
         cursor.close()
 
-from psycopg2.extras import execute_values
-import pandas as pd
-import numpy as np
-import json
 
 def insert_table_data(pg_conn, table_name, df):
     """
     Inserts DataFrame into PostgreSQL table.
     Uses execute_values for bulk insert performance.
     """
-    if df.empty:
-        logger.warning(f"Empty DataFrame for {table_name}, skipping")
+    if df is None or df.empty:
+        logger.warning(f"Empty/None DataFrame for {table_name}, skipping insert")
         return 0
     
     cursor = pg_conn.cursor()
@@ -248,11 +177,9 @@ def insert_table_data(pg_conn, table_name, df):
         )
         
         # Step 3: convert DataFrame to list of tuples
-        # must handle special types before inserting
         records = prepare_records(df, table_name)
         
         # Step 4: bulk insert using execute_values
-        # page_size controls how many rows per batch
         execute_values(
             cursor,
             insert_sql,
@@ -270,30 +197,14 @@ def insert_table_data(pg_conn, table_name, df):
         pg_conn.rollback()
         logger.error(f"Insert failed for {table_name}: {e}")
         raise
-    
+        
     finally:
         cursor.close()
 
 def prepare_records(df, table_name):
     """
-    id , name
-    1 , "A"
-    2, "B
-    3, C
-    [(1,A),(2,"B"),(3,"C")]
     Converts DataFrame to list of tuples for psycopg2.
     Handles JSON, UUID, boolean, NaN values.
-    | Original Type         | Converted To               | Why?                                               |
-| --------------------- | -------------------------- | -------------------------------------------------- |
-| `np.nan`              | `None`                     | PostgreSQL stores missing values as `NULL`         |
-| `pd.NaT`              | `None`                     | Missing timestamps become `NULL`                   |
-| `pd.Timestamp`        | `datetime.datetime`        | Native Python datetime is understood by `psycopg2` |
-| `dict`                | JSON string (`json.dumps`) | JSONB columns expect JSON text                     |
-| `np.int64`            | `int`                      | Convert NumPy scalar to native Python              |
-| `np.float64`          | `float`                    | Convert NumPy scalar to native Python              |
-| `np.bool_`            | `bool`                     | Convert NumPy scalar to native Python              |
-| Any other Python type | Unchanged                  | Already compatible with `psycopg2`                 |
-
     """
     records = []
     
@@ -303,7 +214,6 @@ def prepare_records(df, table_name):
             value = row[col]
             
             # handle NaN/NaT → None
-            # pandas uses NaN and NaT for missing, PostgreSQL uses NULL
             if (isinstance(value, float) and np.isnan(value)) or value is pd.NaT:
                 record.append(None)
             
@@ -312,7 +222,6 @@ def prepare_records(df, table_name):
                 record.append(value.to_pydatetime())
             
             # handle dict → JSON string for JSONB
-            # psycopg2 needs json string for JSONB columns
             elif isinstance(value, dict):
                 record.append(json.dumps(value))
             
@@ -338,65 +247,82 @@ def reset_sequence(pg_conn, table_name, pk_column="id"):
     """
     Resets PostgreSQL sequence to max existing ID.
     Must run after inserting data with explicit IDs.
-    
-    Without this: next INSERT will try id=1 and fail
-    With this: next INSERT continues from max_id + 1
     """
+    _init_schema_info()
     if table_name in schema_info["uuid_tables"]:
-        logger.info(f"Skipping sequence reset for UUID table: {table_name}")
+        # UUID tables do not have serial/sequence
         return
         
     cursor = pg_conn.cursor()
-    
     try:
-        cursor.execute(f"""
-            SELECT setval(
-                pg_get_serial_sequence('{table_name}', '{pk_column}'),
-                COALESCE(MAX({pk_column}), 1)
-            )
-            FROM {table_name};
-        """)
-        pg_conn.commit()
-        logger.info(f"Sequence reset for {table_name}.{pk_column}")
+        # Step 1: get max id
+        cursor.execute(f"SELECT COALESCE(MAX({pk_column}), 0) FROM {table_name};")
+        max_id = cursor.fetchone()[0]
         
+        # Step 2: check if sequence exists
+        seq_name = f"{table_name}_{pk_column}_seq"
+        cursor.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = %s);", 
+            (seq_name,)
+        )
+        seq_exists = cursor.fetchone()[0]
+        
+        if seq_exists:
+            # Step 3: set sequence value
+            # setval needs max_id + 1, or is_called=false
+            cursor.execute(
+                f"SELECT setval(%s, %s, false);", 
+                (seq_name, max_id + 1)
+            )
+            pg_conn.commit()
+            logger.info(f"Sequence reset for {table_name} to {max_id + 1}")
+            
     except Exception as e:
         pg_conn.rollback()
-        # not all tables have sequences (UUID tables dont)
-        # so just log warning, dont raise
-        logger.warning(
-            f"Sequence reset skipped for {table_name}: {e}"
-        )
-    
+        logger.error(f"Failed to reset sequence for {table_name}: {e}")
+        
     finally:
         cursor.close()
 
 
-def load_table(pg_conn, table_name, df, mysql_schema, schema_info=None):
+def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_first_chunk=True, is_last_chunk=True):
     """
-    Complete load process for one table.
-    1. Create table in PostgreSQL
-    2. Insert data
-    3. Reset sequence
+    Complete load process for one table / chunk.
+    1. Create table in PostgreSQL (on first chunk)
+    2. Insert data (if data exists)
+    3. Reset sequence (on last chunk)
     """
-    # Step 1: create the table in PostgreSQL
-    create_postgres_table(pg_conn, table_name, mysql_schema)
+    global schema_info
+    if schema_info_arg is not None:
+        schema_info = schema_info_arg
+    else:
+        _init_schema_info()
 
-    # Step 2: insert transformed data
-    row_count = insert_table_data(pg_conn, table_name, df)
+    # Step 1: create the table in PostgreSQL on first chunk
+    if is_first_chunk:
+        create_postgres_table(pg_conn, table_name, mysql_schema)
 
-    # Step 3: reset sequence only for non UUID tables
-    # UUID tables dont have SERIAL so no sequence to reset
-    if table_name not in schema_info["uuid_tables"]:
-        reset_sequence(pg_conn, table_name)
+    # Step 2: insert transformed data if it is not None/empty
+    row_count = 0
+    if df is not None and not df.empty:
+        row_count = insert_table_data(pg_conn, table_name, df)
+
+    # Step 3: reset sequence only for non UUID tables on last chunk
+    if is_last_chunk:
+        if schema_info and "uuid_tables" in schema_info:
+            if table_name not in schema_info["uuid_tables"]:
+                reset_sequence(pg_conn, table_name)
+        else:
+            _init_schema_info()
+            if table_name not in schema_info["uuid_tables"]:
+                reset_sequence(pg_conn, table_name)
 
     return row_count
+
 
 def load_all_tables(transformed_data, mysql_schemas):
     """
     Loads all 100 tables into PostgreSQL.
-    
-    transformed_data = {"table_name": DataFrame}
-    mysql_schemas    = {"table_name": schema_dict}
     """
     pg_conn = get_postgres_connection()
     
@@ -424,7 +350,7 @@ def load_all_tables(transformed_data, mysql_schemas):
             except Exception as e:
                 logger.error(f"Failed to load {table_name}: {e}")
                 failed_tables.append(table_name)
-                continue   # skip failed table, continue others
+                continue
         
         # re-enable FK checks after load
         cursor = pg_conn.cursor()
@@ -442,7 +368,6 @@ def load_all_tables(transformed_data, mysql_schemas):
         if failed_tables:
             logger.warning(f"Failed tables: {failed_tables}")
         
-                # after re-enabling FK checks add this:
         print("\n--- Adding Foreign Key Constraints ---")
         fk_success, fk_failed = add_foreign_keys(pg_conn)
         print(f"FK constraints added: {fk_success}")
@@ -454,11 +379,17 @@ def load_all_tables(transformed_data, mysql_schemas):
         pg_conn.close()
 
 
-def add_foreign_keys(pg_conn, schema_info=None):
+def add_foreign_keys(pg_conn, schema_info_arg=None):
     """
     Adds FK constraints after all data is loaded.
     Runs ALTER TABLE ADD CONSTRAINT for each relationship.
     """
+    global schema_info
+    if schema_info_arg is not None:
+        schema_info = schema_info_arg
+    else:
+        _init_schema_info()
+
     cursor = pg_conn.cursor()
     success_count = 0
     failed_fks = []
@@ -507,38 +438,3 @@ def add_foreign_keys(pg_conn, schema_info=None):
         logger.warning(f"Failed FKs: {failed_fks}")
     
     return success_count, failed_fks
-
-
-
-
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
-    
-    from migration.extract import extract_all_tables, get_table_schema
-    from migration.transformer import transform_all_tables
-    
-    # Step 1: extract all
-    print("\n--- Extracting all tables ---")
-    extracted = extract_all_tables()
-    
-    # Step 2: get all schemas
-    print("\n--- Getting all schemas ---")
-    schemas = {
-        table: get_table_schema(table) 
-        for table in extracted.keys()
-    }
-    
-    # Step 3: transform all
-    print("\n--- Transforming all tables ---")
-    transformed = transform_all_tables(extracted)
-    
-    # Step 4: load all
-    print("\n--- Loading all tables ---")
-    total_rows, failed = load_all_tables(transformed, schemas)
-    
-    print(f"\nTotal rows loaded: {total_rows}")
-    print(f"Failed tables: {failed}")
