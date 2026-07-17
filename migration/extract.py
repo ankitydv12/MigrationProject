@@ -43,6 +43,7 @@ we have to provide root folder to the python so it get the file
 """
 
 
+import logging
 import sys
 import os
 
@@ -62,6 +63,7 @@ from sqlalchemy import inspect
 import logging
 from utils.schema_analyzer import analyze_schema
 
+logging.disable(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 schema_info = analyze_schema()
 
@@ -79,7 +81,7 @@ def get_all_table_names():
         return table_names        
 
     except Exception as e:
-        logging.error("Failed to get tables name --> {e}")
+        logging.error(f"Failed to get tables name --> {e}")
     finally:
         engine.dispose()
         """
@@ -123,6 +125,10 @@ def get_table_schema(table_name, engine=None):
         }
         
         logging.info(f"Schema extracted for table: {table_name}")
+        # print("+++++++++++++++++++++++++++Schema+++++++++++++++++++++++++++++++++")
+        # for k , v in schema.items():
+        #     print(k , "     \n",v)
+        # print("+++++++++++++++++++++++++++Schema+++++++++++++++++++++++++++++++++")
         return schema
     
     except Exception as e:
@@ -167,9 +173,20 @@ def extract_table_data(table_name, chunksize=1000, engine=None):
         logging.info(f"Extracting rows from  {table_name}")
         chunks = []
         chunk_iterator = pd.read_sql_table(table_name,engine,chunksize=chunksize)
-
+        """
+        pd.read_sql_table(table_name,engine,chunksize=chunksize) = Return Generator Object 
+        chuck_iterator is a generator and its yield is pd DataFrame
+        """
+        # print(type(chunk_iterator))
+        
         for i , chunk in enumerate(chunk_iterator):
+            # print(type(chunk))
             chunks.append(chunk)
+            """
+            print("+++++++++++++++++++++++++++++++++++1000 Chucks of Data * 10+++++++++++++++++++++")
+            print(chunks)
+            print("+++++++++++++++++++++++++++++++++++1000 Chucks of Data * 10+++++++++++++++++++++")
+            """
             logging.info(f"{table_name} chunk: {i+1} | {len(chunk)} row Extracted.....")
 
         full_df = pd.concat(chunks,ignore_index=True)
@@ -195,13 +212,22 @@ def extract_all_tables():
     }
     """
     #Step 1 : Get migration order 
-    all_tables_ordered = get_migration_order() 
+    all_tables_ordered = get_migration_order()
 
     #step 3 : loop through and extract each table
     extracted_data = {}
 
     for table_name in all_tables_ordered:
         extracted_data[table_name] = extract_table_data(table_name)
+    """
+    {
+        "table1" : "df1"
+        .
+        .
+        .
+        "table100" : "df100"    
+    }
+    """
 
     logging.info(f"Extraction complete. "
                f"Total tables extracted: {len(extracted_data)}")
@@ -210,10 +236,12 @@ def extract_all_tables():
 
 
 if __name__ == "__main__":
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    logging.disable(logging.CRITICAL)
     
     # Test 1 - table names
     tables = get_all_table_names()

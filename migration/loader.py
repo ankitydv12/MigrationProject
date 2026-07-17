@@ -1,3 +1,29 @@
+"""
+load_all_tables()
+    │
+    ├── SET session_replication_role = replica
+    │
+    ├── For every table in migration_order:
+    │       │
+    │       └── load_table()
+    │               │
+    │               ├── create_postgres_table()
+    │               │       └── map_mysql_type_to_postgres()
+    │               │
+    │               ├── prepare_records()
+    │               │
+    │               ├── insert_table_data()
+    │               │
+    │               └── reset_sequence()
+    │
+    ├── SET session_replication_role = DEFAULT
+    │
+    ├── add_foreign_keys()
+    │
+    └── Return total_rows, failed_tables
+"""
+
+
 import psycopg2
 import sys
 import os
@@ -88,6 +114,40 @@ def create_postgres_table(pg_conn, table_name, mysql_schema):
     Drops table first if it already exists.
     
     mysql_schema comes from extract.get_table_schema()
+    mysql_schema = {
+    "table_name": "customers",
+
+    "columns": [
+        {
+            "name": "id",
+            "type": INTEGER(),
+            "nullable": False
+        },
+        {
+            "name": "name",
+            "type": VARCHAR(100),
+            "nullable": False
+        },
+        {
+            "name": "email",
+            "type": VARCHAR(255),
+            "nullable": True
+        }
+    ],
+
+    "primary_key": {
+        "constrained_columns": ["id"],
+        "name": "PRIMARY"
+    },
+
+    "foreign_keys": [
+        {
+            "constrained_columns": ["country_id"],
+            "referred_table": "countries",
+            "referred_columns": ["id"]
+        }
+    ]
+}
     """
     cursor = pg_conn.cursor()
     
@@ -103,13 +163,18 @@ def create_postgres_table(pg_conn, table_name, mysql_schema):
         pk_cols = mysql_schema["primary_key"]["constrained_columns"]
         
         col_definitions = []
-        
         for col in columns:
-            col_name = col["name"]
+            col_name = col["name"] #id 
             pg_type  = map_mysql_type_to_postgres(
                 col["type"], table_name, col_name
             )
-            
+            """
+            Create Table student(
+            nameCOL = id , datatype = Int , key = primary key  ,
+            NameCOl = name , datatype varchar(100) , nullable = not null
+            mobile  no , int , null
+            )
+            """
             # handle nullable
             nullable = "NULL" if col["nullable"] else "NOT NULL"
             
@@ -129,6 +194,9 @@ def create_postgres_table(pg_conn, table_name, mysql_schema):
                 col_def = f"{col_name} {pg_type} {nullable}"
             
             col_definitions.append(col_def)
+            #col_defination = id UUID Primary Key
+            #col_defination = id Serial Primary Key
+            ##col_defination = id Integer NOT NULL
         
         # Step 3: build CREATE TABLE statement
         cols_sql = ",\n    ".join(col_definitions)
@@ -137,6 +205,7 @@ def create_postgres_table(pg_conn, table_name, mysql_schema):
             f"    {cols_sql}\n"
             f");"
         )
+        #print(create_sql)
         
         logger.info(f"Creating table: {table_name}")
         cursor.execute(create_sql)
@@ -207,8 +276,24 @@ def insert_table_data(pg_conn, table_name, df):
 
 def prepare_records(df, table_name):
     """
+    id , name
+    1 , "A"
+    2, "B
+    3, C
+    [(1,A),(2,"B"),(3,"C")]
     Converts DataFrame to list of tuples for psycopg2.
     Handles JSON, UUID, boolean, NaN values.
+    | Original Type         | Converted To               | Why?                                               |
+| --------------------- | -------------------------- | -------------------------------------------------- |
+| `np.nan`              | `None`                     | PostgreSQL stores missing values as `NULL`         |
+| `pd.NaT`              | `None`                     | Missing timestamps become `NULL`                   |
+| `pd.Timestamp`        | `datetime.datetime`        | Native Python datetime is understood by `psycopg2` |
+| `dict`                | JSON string (`json.dumps`) | JSONB columns expect JSON text                     |
+| `np.int64`            | `int`                      | Convert NumPy scalar to native Python              |
+| `np.float64`          | `float`                    | Convert NumPy scalar to native Python              |
+| `np.bool_`            | `bool`                     | Convert NumPy scalar to native Python              |
+| Any other Python type | Unchanged                  | Already compatible with `psycopg2`                 |
+
     """
     records = []
     

@@ -78,6 +78,7 @@ def transform_uuid_columns(df, table_name):
             return None
         try:
             # this validates format and returns clean UUID string
+
             return str(uuid_lib.UUID(str(value)))
         except ValueError:
             logger.warning(

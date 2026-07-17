@@ -35,13 +35,28 @@ def main():
     # Step 1: Extract
     print("\n--- Step 1: Extracting from MySQL ---")
     extracted = extract_all_tables()
-    
+    """
+    {
+        "table" : "df"
+    }
+    """
     # Step 2: Get schemas
     print("\n--- Step 2: Reading schemas ---")
     schemas = {
         table: get_table_schema(table)
         for table in extracted.keys()
     }
+    """
+    {
+        "table_name": {"table_name" : table_name,
+            "columns"    : columns,
+            "primary_key": pk,
+            "foreign_keys": fks}
+        .
+        .
+        .
+    }
+    """
     
     # Step 3: Transform
     print("\n--- Step 3: Transforming data ---")
