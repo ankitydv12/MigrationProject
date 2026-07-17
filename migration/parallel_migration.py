@@ -64,7 +64,7 @@ class ParallelMigrationManager:
         Creates a dedicated PostgreSQL connection, disables FK enforcement for that session,
         executes the table-processing ETL stages, restores FK enforcement, and closes the connection.
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         pg_conn = None
         fk_disabled = False
         try:
@@ -93,19 +93,19 @@ class ParallelMigrationManager:
             fk_disabled = False
             logger.info(f"[{table_name}] FK constraints re-enabled")
 
-            duration = time.time() - start_time
+            duration = time.perf_counter() - start_time
             return {
                 "table": table_name,
-                "status": "SUCCESS",
+                "success": True,
                 "rows": rows,
                 "duration": duration
             }
         except Exception as e:
-            duration = time.time() - start_time
+            duration = time.perf_counter() - start_time
             logger.error(f"[{table_name}] Failed to migrate table: {e}")
             return {
                 "table": table_name,
-                "status": "FAILED",
+                "success": False,
                 "rows": 0,
                 "duration": duration,
                 "error": str(e)
@@ -127,6 +127,8 @@ class ParallelMigrationManager:
         """
         Run the complete migration pipeline in parallel using a ThreadPoolExecutor.
         """
+        pipeline_start = time.perf_counter()
+
         print("\n" + "="*50)
         print("MYSQL TO POSTGRESQL MIGRATION PIPELINE")
         print("="*50)
@@ -144,11 +146,13 @@ class ParallelMigrationManager:
         print("="*50)
 
         # Determine thread pool size
-        pool_size = min(self.max_workers, len(self.schema_info["migration_order"]))
+        total_tables = len(self.schema_info["migration_order"])
+        pool_size = min(self.max_workers, total_tables)
         logger.info(f"Starting parallel migration using ThreadPoolExecutor with {pool_size} workers")
 
         total_rows = 0
         failed_tables = []
+        table_statistics = []
 
         # Execute workers concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
@@ -157,17 +161,29 @@ class ParallelMigrationManager:
                 for table_name in self.schema_info["migration_order"]
             }
 
+            completed_count = 0
             for future in concurrent.futures.as_completed(futures):
                 table_name = futures[future]
+                completed_count += 1
+                print(f"Completed {completed_count}/{total_tables} tables")
+                
                 try:
                     stats = future.result()
-                    if stats["status"] == "SUCCESS":
+                    table_statistics.append(stats)
+                    if stats["success"]:
                         total_rows += stats["rows"]
                     else:
                         failed_tables.append(table_name)
                 except Exception as e:
                     logger.error(f"Worker thread for table {table_name} generated an unhandled exception: {e}")
                     failed_tables.append(table_name)
+                    table_statistics.append({
+                        "table": table_name,
+                        "success": False,
+                        "rows": 0,
+                        "duration": 0.0,
+                        "error": str(e)
+                    })
 
         logger.info(
             f"Bulk load complete. "
@@ -190,6 +206,46 @@ class ParallelMigrationManager:
         # Step 5: Validate
         print("\n--- Step 5: Validating migration ---")
         success = self._validate()
+        
+        # End pipeline timing
+        pipeline_duration = time.perf_counter() - pipeline_start
+
+        # Calculate performance metrics
+        total_tables_count = len(table_statistics)
+        success_tables_count = sum(1 for t in table_statistics if t["success"])
+        failed_tables_count = total_tables_count - success_tables_count
+        
+        if total_tables_count > 0:
+            avg_duration = sum(t["duration"] for t in table_statistics) / total_tables_count
+            fastest_table = min(table_statistics, key=lambda x: x["duration"])
+            slowest_table = max(table_statistics, key=lambda x: x["duration"])
+        else:
+            avg_duration = 0.0
+            fastest_table = {"table": "N/A", "duration": 0.0}
+            slowest_table = {"table": "N/A", "duration": 0.0}
+            
+        throughput = total_rows / pipeline_duration if pipeline_duration > 0 else 0.0
+
+        # Performance Summary Display
+        print("\n" + "="*48)
+        print("PERFORMANCE SUMMARY")
+        print("="*48 + "\n")
+        print(f"Workers Used        : {pool_size}\n")
+        print(f"Tables Migrated     : {success_tables_count}")
+        print(f"Failed Tables       : {failed_tables_count}\n")
+        print(f"Rows Migrated       : {total_rows:,}\n")
+        print(f"Total Time          : {pipeline_duration:.2f} sec\n")
+        print(f"Average/Table       : {avg_duration:.2f} sec\n")
+        print(f"Throughput          : {int(throughput):,} rows/sec\n")
+        print(f"Fastest Table       : {fastest_table['table']} ({fastest_table['duration']:.2f} sec)\n")
+        print(f"Slowest Table       : {slowest_table['table']} ({slowest_table['duration']:.2f} sec)\n")
+        print("="*48)
+
+        # Slowest Tables Report
+        sorted_stats = sorted(table_statistics, key=lambda x: x["duration"], reverse=True)
+        print("\nTop 5 Slowest Tables\n")
+        for i, stats in enumerate(sorted_stats[:5], 1):
+            print(f"{i}. {stats['table']:<15} {stats['duration']:.2f} sec")
 
         # Final summary
         print("\n" + "="*50)
