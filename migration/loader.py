@@ -7,6 +7,8 @@ from psycopg2.extras import execute_values
 import pandas as pd
 import numpy as np
 import json
+import io
+import time
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
@@ -154,50 +156,108 @@ def create_postgres_table(pg_conn, table_name, mysql_schema):
         cursor.close()
 
 
-def insert_table_data(pg_conn, table_name, df):
+def prepare_copy_buffer(df):
+    """
+    Converts DataFrame to an in-memory CSV buffer (io.StringIO)
+    optimized for PostgreSQL COPY. Uses UTF-8 and Unix line endings.
+    """
+    # Create a shallow copy of column references (underlying data arrays are not copied)
+    shallow_df = df.copy(deep=False)
+    
+    for col in shallow_df.columns:
+        # Handle Boolean columns
+        if shallow_df[col].dtype == 'bool' or shallow_df[col].dtype == 'boolean':
+            shallow_df[col] = shallow_df[col].apply(
+                lambda val: None if (val is None or pd.isna(val)) else ('true' if val else 'false')
+            ).astype(object)
+        # Handle Object/Datetime/Timestamp/JSON dict columns
+        elif (shallow_df[col].dtype == 'object' or 
+              isinstance(shallow_df[col].dtype, pd.DatetimeTZDtype) or 
+              shallow_df[col].dtype == 'datetime64[ns]'):
+            
+            def format_val(val):
+                if val is None or pd.isna(val) or val is pd.NaT:
+                    return None
+                if isinstance(val, dict):
+                    return json.dumps(val)
+                if isinstance(val, bool):
+                    return 'true' if val else 'false'
+                if isinstance(val, pd.Timestamp):
+                    return val.isoformat()
+                return val
+
+            shallow_df[col] = shallow_df[col].apply(format_val)
+            
+    csv_buffer = io.StringIO()
+    # Explicitly use lineterminator="\n" for Unix line endings and standard CSV settings
+    shallow_df.to_csv(csv_buffer, index=False, header=False, na_rep='\\N', sep=',', quotechar='"', doublequote=True, lineterminator="\n")
+    csv_buffer.seek(0)
+    return csv_buffer
+
+
+def insert_table_data(pg_conn, table_name, df, chunk_number=1):
     """
     Inserts DataFrame into PostgreSQL table.
-    Uses execute_values for bulk insert performance.
+    Uses COPY FROM STDIN or falls back to execute_values based on config.
     """
     if df is None or df.empty:
         logger.warning(f"Empty/None DataFrame for {table_name}, skipping insert")
         return 0
     
+    import config
+    use_copy = getattr(config, "USE_POSTGRES_COPY", True)
     cursor = pg_conn.cursor()
     
     try:
-        # Step 1: get column names from DataFrame
-        columns = list(df.columns)
-        
-        # Step 2: build INSERT statement
-        cols_str = ", ".join(columns)
-        insert_sql = (
-            f"INSERT INTO {table_name} ({cols_str}) "
-            f"VALUES %s"
-        )
-        
-        # Step 3: convert DataFrame to list of tuples
-        records = prepare_records(df, table_name)
-        
-        # Step 4: bulk insert using execute_values
-        execute_values(
-            cursor,
-            insert_sql,
-            records,
-            page_size=1000
-        )
-        
-        pg_conn.commit()
-        logger.info(
-            f"Inserted {len(records)} rows into {table_name}"
-        )
-        return len(records)
-        
+        if use_copy:
+            logger.info(f"[{table_name}] COPY Started | Chunk: {chunk_number}")
+            
+            # 1. Prepare copy buffer (isolated logic)
+            csv_buffer = prepare_copy_buffer(df)
+            
+            # 2. Build quoted SQL identifiers
+            columns_str = ", ".join(f'"{col}"' for col in df.columns)
+            copy_sql = f'COPY "{table_name}" ({columns_str}) FROM STDIN WITH CSV NULL \'\\N\''
+            
+            # 3. Measure only database loading time
+            start_time = time.perf_counter()
+            cursor.copy_expert(copy_sql, csv_buffer)
+            duration = time.perf_counter() - start_time
+            
+            pg_conn.commit()
+            
+            # 4. Log chunk throughput
+            rows_sec = len(df) / duration if duration > 0 else 0.0
+            logger.info(f"[{table_name}] COPY Completed | Chunk: {chunk_number} | Rows Loaded: {len(df)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            return len(df)
+        else:
+            logger.info(f"[{table_name}] INSERT Started (execute_values) | Chunk: {chunk_number}")
+            
+            # 1. Prepare records for insert
+            records = prepare_records(df, table_name)
+            
+            # 2. Build quoted SQL identifiers
+            columns_str = ", ".join(f'"{col}"' for col in df.columns)
+            insert_sql = f'INSERT INTO "{table_name}" ({columns_str}) VALUES %s'
+            
+            # 3. Measure only database loading time
+            start_time = time.perf_counter()
+            execute_values(cursor, insert_sql, records, page_size=1000)
+            duration = time.perf_counter() - start_time
+            
+            pg_conn.commit()
+            
+            # 4. Log chunk throughput
+            rows_sec = len(records) / duration if duration > 0 else 0.0
+            logger.info(f"[{table_name}] INSERT Completed (execute_values) | Chunk: {chunk_number} | Rows Loaded: {len(records)} | Duration: {duration:.4f} sec | Throughput: {rows_sec:.2f} rows/sec")
+            return len(records)
+            
     except Exception as e:
         pg_conn.rollback()
-        logger.error(f"Insert failed for {table_name}: {e}")
+        # Raise exception directly without automatic fallback
+        strategy = "COPY" if use_copy else "execute_values"
+        logger.error(f"[{table_name}] Load failed using {strategy}: {e}")
         raise
-        
     finally:
         cursor.close()
 
@@ -285,7 +345,7 @@ def reset_sequence(pg_conn, table_name, pk_column="id"):
         cursor.close()
 
 
-def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_first_chunk=True, is_last_chunk=True):
+def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_first_chunk=True, is_last_chunk=True, chunk_number=1):
     """
     Complete load process for one table / chunk.
     1. Create table in PostgreSQL (on first chunk)
@@ -305,7 +365,7 @@ def load_table(pg_conn, table_name, df, mysql_schema, schema_info_arg=None, is_f
     # Step 2: insert transformed data if it is not None/empty
     row_count = 0
     if df is not None and not df.empty:
-        row_count = insert_table_data(pg_conn, table_name, df)
+        row_count = insert_table_data(pg_conn, table_name, df, chunk_number=chunk_number)
 
     # Step 3: reset sequence only for non UUID tables on last chunk
     if is_last_chunk:

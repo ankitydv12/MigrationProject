@@ -47,3 +47,6 @@ LOG_DIRECTORY = "logs"
 
 # Global debug flag (when True, full stack traces are logged on error)
 DEBUG = False
+
+# Enable/disable using PostgreSQL COPY protocol for loading data
+USE_POSTGRES_COPY = True

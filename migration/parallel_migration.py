@@ -66,11 +66,11 @@ class ParallelMigrationManager:
         """
         return transform_table(df, table_name, self.schema_info)
 
-    def _load(self, pg_conn, table_name, df, schema, is_first_chunk=True, is_last_chunk=True):
+    def _load(self, pg_conn, table_name, df, schema, is_first_chunk=True, is_last_chunk=True, chunk_number=1):
         """
         Load transformed data to PostgreSQL for a single table.
         """
-        return load_table(pg_conn, table_name, df, schema, self.schema_info, is_first_chunk, is_last_chunk)
+        return load_table(pg_conn, table_name, df, schema, self.schema_info, is_first_chunk, is_last_chunk, chunk_number)
 
     def _validate(self):
         """
@@ -120,7 +120,7 @@ class ParallelMigrationManager:
             except StopIteration:
                 # Table is empty, create schema structure only without DataFrame inserts
                 logger.info(f"[{worker_id}] [{table_name}] Table is empty, creating structure only")
-                self._load(pg_conn, table_name, None, schema, is_first_chunk=True, is_last_chunk=True)
+                self._load(pg_conn, table_name, None, schema, is_first_chunk=True, is_last_chunk=True, chunk_number=0)
                 
                 # Restore FK and exit
                 cursor = pg_conn.cursor()
@@ -159,7 +159,7 @@ class ParallelMigrationManager:
                 logger.info(f"[{worker_id}] [{table_name}] Transform Complete")
                 
                 rows = self._load(pg_conn, table_name, transformed_chunk, schema, 
-                                  is_first_chunk=is_first, is_last_chunk=is_last)
+                                  is_first_chunk=is_first, is_last_chunk=is_last, chunk_number=chunk_count)
                 total_rows_loaded += rows
                 logger.info(f"[{worker_id}] [{table_name}] Load Complete")
                 logger.info(f"[{worker_id}] [{table_name}] Rows Loaded: {rows}")
@@ -383,12 +383,15 @@ class ParallelMigrationManager:
         largest_chunk = max((t.get("largest_chunk_size", 0) for t in table_statistics), default=0)
         avg_chunk_size = total_rows / total_chunks if total_chunks > 0 else 0.0
 
+        strategy_str = "COPY" if config.USE_POSTGRES_COPY else "execute_values"
+
         if config.ENABLE_PERFORMANCE_REPORT:
             # Print performance summary to console
             print("\n" + "="*48)
             print("PERFORMANCE SUMMARY")
             print("="*48 + "\n")
             print(f"Workers Used        : {pool_size}\n")
+            print(f"Loading Strategy    : {strategy_str}\n")
             print(f"Tables Migrated     : {success_tables_count}")
             print(f"Failed Tables       : {failed_tables_count}\n")
             print(f"Rows Migrated       : {total_rows:,}\n")
@@ -407,6 +410,7 @@ class ParallelMigrationManager:
             logger.info("PERFORMANCE SUMMARY")
             logger.info("================================================")
             logger.info(f"Workers             : {pool_size}")
+            logger.info(f"Loading Strategy    : {strategy_str}")
             logger.info(f"Rows Migrated       : {total_rows}")
             logger.info(f"Pipeline Duration   : {pipeline_duration:.2f} sec")
             logger.info(f"Throughput          : {throughput:,.2f} rows/sec")
