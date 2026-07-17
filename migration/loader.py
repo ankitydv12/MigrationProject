@@ -67,16 +67,22 @@ def recreate_connection(conn_holder):
     Safely closes the old connection and creates a new one,
     disabling FK checks on the new connection/session.
     """
+    import config
+    import config.db_config as db_cfg
+    
     try:
-        conn_holder.conn.close()
+        if getattr(config, "USE_CONNECTION_POOL", True) and db_cfg.postgres_pool is not None:
+            db_cfg.postgres_pool.recreate_postgres_connection(conn_holder.conn)
+        else:
+            conn_holder.conn.close()
+            conn_holder.conn = get_postgres_connection()
     except Exception:
-        pass
-    new_conn = get_postgres_connection()
-    cursor = new_conn.cursor()
+        conn_holder.conn = get_postgres_connection()
+        
+    cursor = conn_holder.conn.cursor()
     cursor.execute("SET session_replication_role = replica;")
-    new_conn.commit()
+    conn_holder.conn.commit()
     cursor.close()
-    conn_holder.conn = new_conn
 
 def execute_with_retry(operation, op_name, pg_conn_or_holder, *args, **kwargs):
     """
@@ -260,11 +266,7 @@ def prepare_copy_buffer(df):
             shallow_df[col] = shallow_df[col].apply(
                 lambda val: None if (val is None or pd.isna(val)) else ('true' if val else 'false')
             ).astype(object)
-        # Handle Object/Datetime/Timestamp/JSON dict columns
-        elif (shallow_df[col].dtype == 'object' or 
-              isinstance(shallow_df[col].dtype, pd.DatetimeTZDtype) or 
-              shallow_df[col].dtype == 'datetime64[ns]'):
-            
+        else:
             def format_val(val):
                 if val is None or pd.isna(val) or val is pd.NaT:
                     return None
@@ -274,9 +276,17 @@ def prepare_copy_buffer(df):
                     return 'true' if val else 'false'
                 if isinstance(val, pd.Timestamp):
                     return val.isoformat()
+                
+                # If it's a float/numpy float representing an integer, write as integer string
+                try:
+                    f_val = float(val)
+                    if f_val.is_integer():
+                        return str(int(f_val))
+                except (ValueError, TypeError):
+                    pass
                 return val
 
-            shallow_df[col] = shallow_df[col].apply(format_val)
+            shallow_df[col] = shallow_df[col].apply(format_val).astype(object)
             
     csv_buffer = io.StringIO()
     # Explicitly use lineterminator="\n" for Unix line endings and standard CSV settings
@@ -560,13 +570,15 @@ def add_foreign_keys(pg_conn, schema_info_arg=None):
                     f" → {parent_table}.{parent_col}"
                 )
             
+            except (psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError, TimeoutError) as e:
+                pg_conn.rollback()
+                raise
             except Exception as e:
                 pg_conn.rollback()
                 failed_fks.append(constraint_name)
                 logger.warning(
                     f"FK failed: {constraint_name} | {e}"
                 )
-                raise
     
     finally:
         cursor.close()

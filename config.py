@@ -14,6 +14,10 @@ CHUNK_SIZE = 5000
 # Enable/disable row count validation step at the end of the migration
 ENABLE_VALIDATION = True
 
+# Enable/disable random row-by-row sample data validation
+ENABLE_SAMPLE_VALIDATION = False
+VALIDATION_SAMPLE_SIZE = 100
+
 # Enable/disable performance metrics summary display
 ENABLE_PERFORMANCE_REPORT = True
 
@@ -46,7 +50,7 @@ ENABLE_CONSOLE_LOGGING = True
 LOG_DIRECTORY = "logs"
 
 # Global debug flag (when True, full stack traces are logged on error)
-DEBUG = False
+DEBUG = True
 
 # Enable/disable using PostgreSQL COPY protocol for loading data
 USE_POSTGRES_COPY = True
@@ -62,3 +66,8 @@ ENABLE_CHECKPOINT = True
 AUTO_RESUME = True
 CHECKPOINT_FILE = "migration_checkpoint.json"
 FORCE_FRESH_MIGRATION = False
+
+# Connection Pooling & Resource Management configuration
+USE_CONNECTION_POOL = True
+POOL_SIZE = 8
+POOL_TIMEOUT = 30
