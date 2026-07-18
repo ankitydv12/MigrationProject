@@ -5,3 +5,4 @@ pandas
 faker
 sqlalchemy
 PyQt5
+streamlit
