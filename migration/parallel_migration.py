@@ -336,7 +336,7 @@ class ParallelMigrationManager:
                 # Returns connection back to the pool
                 conn_holder.conn.close()
 
-    def run(self):
+    def run(self, progress_callback=None, status_callback=None, table_callback=None):
         """
         Run the complete migration pipeline in parallel using a ThreadPoolExecutor.
         """
@@ -373,6 +373,8 @@ class ParallelMigrationManager:
 
         try:
             # 1. Analyze Schema (Runs EXACTLY once)
+            if status_callback:
+                status_callback("Analyzing Schema")
             logger.info("Schema Analysis Started")
             self.schema_info = self._analyze_schema()
             logger.info("Schema Analysis Complete")
@@ -421,6 +423,8 @@ class ParallelMigrationManager:
             table_statistics = []
 
             if total_tables > 0:
+                if status_callback:
+                    status_callback("Migrating Tables")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
                     futures = {
                         executor.submit(self._process_table, table_name): table_name
@@ -433,6 +437,11 @@ class ParallelMigrationManager:
                         completed_count += 1
                         if config.ENABLE_PROGRESS_REPORT:
                             print(f"Completed {completed_count}/{total_tables} tables")
+                        if progress_callback:
+                            percent = int((completed_count / total_tables) * 100)
+                            progress_callback(percent)
+                        if table_callback:
+                            table_callback(table_name)
                         
                         try:
                             stats = future.result()
@@ -466,6 +475,8 @@ class ParallelMigrationManager:
                 logger.warning(f"Failed tables: {failed_tables}")
 
             # Post-process: Add foreign keys on a single connection wrapped with retry helper
+            if status_callback:
+                status_callback("Adding Foreign Keys")
             main_conn = get_postgres_connection()
             try:
                 logger.info("Foreign Keys Started")
@@ -483,6 +494,8 @@ class ParallelMigrationManager:
             # Step 5: Validate
             success = True
             if config.ENABLE_VALIDATION:
+                if status_callback:
+                    status_callback("Running Validation")
                 logger.info("Validation Started")
                 print("\n--- Step 5: Validating migration ---")
                 success = self._validate()
@@ -612,6 +625,17 @@ class ParallelMigrationManager:
             print(f"Failed tables       : {len(failed_tables)}")
             print(f"Validation          : {'PASSED' if (not config.ENABLE_VALIDATION or success) else 'FAILED'}")
             print("="*50)
+
+            if status_callback:
+                status_callback("Migration Completed")
+
+            return {
+                "tables": len(self.schema_info["migration_order"]) if self.schema_info else 0,
+                "rows": total_rows,
+                "failed_tables": failed_tables,
+                "time": round(pipeline_duration, 2),
+                "validation": success if config.ENABLE_VALIDATION else False
+            }
 
         finally:
             # Dispose of both connection pools exactly once during application shutdown

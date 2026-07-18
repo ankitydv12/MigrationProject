@@ -40,7 +40,7 @@ try:
     independent_tables = total_tables - dependent_tables
 
 except Exception as e:
-    st.error(f"Unable to analyze schema.\n\n{e}")
+    st.error(f"Unable to analyze schema. Please ensure your database connections are configured and active on the Connections page.\n\nError details: {e}")
     st.stop()
 
 # ---------------- Metrics ---------------- #

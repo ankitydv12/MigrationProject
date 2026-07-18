@@ -1,6 +1,6 @@
 import streamlit as st
 
-from config.logging_config import setup_logging
+from log.logging_config import setup_logging
 setup_logging()
 # ----------------------------------------
 # Configure Logging

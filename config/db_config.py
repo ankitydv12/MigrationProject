@@ -42,7 +42,7 @@ REQUIRED_VARS = [
 
 missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
-    raise EnvironmentError(
+    logger.warning(
         f"Missing environment variables: {missing}. Check your .env file."
     )
 
@@ -301,6 +301,56 @@ def test_all_connection():
     engine.dispose()
 
     print("All connections verified successfully")
+
+def update_db_credentials(mysql_creds, pg_creds):
+    global mysql_host, mysql_port, mysql_user, mysql_password, mysql_database
+    global postgres_host, postgres_port, postgres_user, postgres_password, postgres_database
+    
+    # 1. Dispose existing pools
+    dispose_pools()
+    
+    # 2. Update globals
+    mysql_host = mysql_creds.get("host", mysql_host)
+    mysql_port = str(mysql_creds.get("port", mysql_port))
+    mysql_user = mysql_creds.get("user", mysql_user)
+    mysql_password = mysql_creds.get("password", mysql_password)
+    mysql_database = mysql_creds.get("database", mysql_database)
+    
+    postgres_host = pg_creds.get("host", postgres_host)
+    postgres_port = str(pg_creds.get("port", postgres_port))
+    postgres_user = pg_creds.get("user", postgres_user)
+    postgres_password = pg_creds.get("password", postgres_password)
+    postgres_database = pg_creds.get("database", postgres_database)
+    
+    # 3. Update os.environ
+    os.environ["MYSQL_HOST"] = mysql_host
+    os.environ["MYSQL_PORT"] = mysql_port
+    os.environ["MYSQL_USER"] = mysql_user
+    os.environ["MYSQL_PASSWORD"] = mysql_password
+    os.environ["MYSQL_DATABASE"] = mysql_database
+    
+    os.environ["POSTGRES_HOST"] = postgres_host
+    os.environ["POSTGRES_PORT"] = postgres_port
+    os.environ["POSTGRES_USER"] = postgres_user
+    os.environ["POSTGRES_PASSWORD"] = postgres_password
+    os.environ["POSTGRES_DATABASE"] = postgres_database
+    
+    # 4. Write to .env file to persist
+    try:
+        with open(".env", "w", encoding="utf-8") as f:
+            f.write(f"MYSQL_HOST={mysql_host}\n")
+            f.write(f"MYSQL_PORT={mysql_port}\n")
+            f.write(f"MYSQL_USER={mysql_user}\n")
+            f.write(f"MYSQL_PASSWORD={mysql_password}\n")
+            f.write(f"MYSQL_DATABASE={mysql_database}\n\n")
+            f.write(f"POSTGRES_HOST={postgres_host}\n")
+            f.write(f"POSTGRES_PORT={postgres_port}\n")
+            f.write(f"POSTGRES_USER={postgres_user}\n")
+            f.write(f"POSTGRES_PASSWORD={postgres_password}\n")
+            f.write(f"POSTGRES_DATABASE={postgres_database}\n")
+        logger.info("Credentials written to .env successfully")
+    except Exception as e:
+        logger.error(f"Failed to save credentials to .env: {e}")
 
 if __name__ == "__main__":
     test_all_connection()
