@@ -47,7 +47,7 @@ with col2:
 
     if st.button(
         "🗑 Clear Logs",
-        use_container_width=True
+        width='stretch'
     ):
 
         open(LOG_FILE, "w").close()

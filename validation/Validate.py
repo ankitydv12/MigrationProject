@@ -175,109 +175,113 @@ def run_validation():
             table_failed = False
             failure_reasons = []
             
-            # Step 1: Row count validation
-            mysql_count_df = pd.read_sql_query(f"SELECT COUNT(*) as cnt FROM {table}", mysql_engine)
-            mysql_row_count = int(mysql_count_df['cnt'].iloc[0])
-            
-            pg_cursor = pg_conn.cursor()
-            pg_cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
-            pg_row_count = pg_cursor.fetchone()[0]
-            pg_cursor.close()
-            
-            if mysql_row_count != pg_row_count:
-                table_failed = True
-                failure_reasons.append(f"Row Count Mismatch (MySQL={mysql_row_count}, PG={pg_row_count})")
+            try:
+                # Step 1: Row count validation
+                mysql_count_df = pd.read_sql_query(f"SELECT COUNT(*) as cnt FROM {table}", mysql_engine)
+                mysql_row_count = int(mysql_count_df['cnt'].iloc[0])
                 
-            # Step 2: Primary Key count comparison
-            pk_constraint = mysql_inspector.get_pk_constraint(table)
-            pk_cols = pk_constraint.get('constrained_columns', [])
-            
-            if pk_cols:
-                pk_col = pk_cols[0]
-                
-                # MySQL PK count
-                mysql_pk_df = pd.read_sql_query(f"SELECT COUNT({pk_col}) as cnt FROM {table}", mysql_engine)
-                mysql_pk_count = int(mysql_pk_df['cnt'].iloc[0])
-                
-                # PG PK count
                 pg_cursor = pg_conn.cursor()
-                pg_cursor.execute(f'SELECT COUNT("{pk_col}") FROM "{table}"')
-                pg_pk_count = pg_cursor.fetchone()[0]
+                pg_cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+                pg_row_count = pg_cursor.fetchone()[0]
                 pg_cursor.close()
                 
-                if mysql_pk_count != pg_pk_count:
+                if mysql_row_count != pg_row_count:
                     table_failed = True
-                    failure_reasons.append(f"PK Count Mismatch (MySQL={mysql_pk_count}, PG={pg_pk_count})")
+                    failure_reasons.append(f"Row Count Mismatch (MySQL={mysql_row_count}, PG={pg_row_count})")
                     
-            # Step 3: NULL count comparison for every nullable column
-            columns = mysql_inspector.get_columns(table)
-            nullable_cols = [c['name'] for c in columns if c['nullable']]
-            
-            for col in nullable_cols:
-                # MySQL Null count
-                mysql_null_df = pd.read_sql_query(f"SELECT COUNT(*) as cnt FROM {table} WHERE {col} IS NULL", mysql_engine)
-                mysql_null_count = int(mysql_null_df['cnt'].iloc[0])
+                # Step 2: Primary Key count comparison
+                pk_constraint = mysql_inspector.get_pk_constraint(table)
+                pk_cols = pk_constraint.get('constrained_columns', [])
                 
-                # PG Null count
-                pg_cursor = pg_conn.cursor()
-                pg_cursor.execute(f'SELECT COUNT(*) FROM "{table}" WHERE "{col}" IS NULL')
-                pg_null_count = pg_cursor.fetchone()[0]
-                pg_cursor.close()
-                
-                if mysql_null_count != pg_null_count:
-                    table_failed = True
-                    failure_reasons.append(f"NULL Count Mismatch on column {col} (MySQL={mysql_null_count}, PG={pg_null_count})")
+                if pk_cols:
+                    pk_col = pk_cols[0]
                     
-            # Step 4: PostgreSQL sequence validation
-            if table in seq_info:
-                seq_check = seq_info[table]
-                if not seq_check["is_correct"]:
-                    table_failed = True
-                    failure_reasons.append(f"Sequence Incorrect (next_value={seq_check['next_value']}, max_id={seq_check['max_id']})")
+                    # MySQL PK count
+                    mysql_pk_df = pd.read_sql_query(f"SELECT COUNT({pk_col}) as cnt FROM {table}", mysql_engine)
+                    mysql_pk_count = int(mysql_pk_df['cnt'].iloc[0])
                     
-            # Step 5: Optional Sample Validation
-            if sample_enabled and not table_failed and pk_cols:
-                pk_col = pk_cols[0]
-                sample_pks_df = pd.read_sql_query(f"SELECT {pk_col} FROM {table} ORDER BY RAND() LIMIT {sample_size}", mysql_engine)
-                
-                if not sample_pks_df.empty:
-                    pk_vals = sample_pks_df[pk_col].tolist()
-                    placeholders = ", ".join(["%s"] * len(pk_vals))
+                    # PG PK count
+                    pg_cursor = pg_conn.cursor()
+                    pg_cursor.execute(f'SELECT COUNT("{pk_col}") FROM "{table}"')
+                    pg_pk_count = pg_cursor.fetchone()[0]
+                    pg_cursor.close()
                     
-                    # Fetch rows from MySQL
-                    mysql_samples = pd.read_sql_query(f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})", mysql_engine, params=tuple(pk_vals))
-                    # Fetch rows from PG
-                    pg_samples = pd.read_sql_query(f'SELECT * FROM "{table}" WHERE "{pk_col}" IN ({placeholders})', pg_conn, params=tuple(pk_vals))
-                    
-                    # Align by sorting
-                    mysql_samples = mysql_samples.sort_values(by=pk_col).reset_index(drop=True)
-                    pg_samples = pg_samples.sort_values(by=pk_col).reset_index(drop=True)
-                    
-                    mismatch_found = False
-                    for idx in range(len(mysql_samples)):
-                        mysql_row = mysql_samples.iloc[idx]
-                        pk_val = mysql_row[pk_col]
-                        
-                        pg_row_matches = pg_samples[pg_samples[pk_col] == pk_val]
-                        if pg_row_matches.empty:
-                            mismatch_found = True
-                            failure_reasons.append(f"Sample row with PK={pk_val} not found in Postgres")
-                            break
-                            
-                        pg_row = pg_row_matches.iloc[0]
-                        for col_item in mysql_samples.columns:
-                            m_val = mysql_row[col_item]
-                            p_val = pg_row[col_item]
-                            
-                            if not compare_values(m_val, p_val):
-                                mismatch_found = True
-                                failure_reasons.append(f"Sample mismatch on column {col_item} for PK={pk_val} (MySQL={m_val}, PG={p_val})")
-                                break
-                        if mismatch_found:
-                            break
-                            
-                    if mismatch_found:
+                    if mysql_pk_count != pg_pk_count:
                         table_failed = True
+                        failure_reasons.append(f"PK Count Mismatch (MySQL={mysql_pk_count}, PG={pg_pk_count})")
+                        
+                # Step 3: NULL count comparison for every nullable column
+                columns = mysql_inspector.get_columns(table)
+                nullable_cols = [c['name'] for c in columns if c['nullable']]
+                
+                for col in nullable_cols:
+                    # MySQL Null count
+                    mysql_null_df = pd.read_sql_query(f"SELECT COUNT(*) as cnt FROM {table} WHERE {col} IS NULL", mysql_engine)
+                    mysql_null_count = int(mysql_null_df['cnt'].iloc[0])
+                    
+                    # PG Null count
+                    pg_cursor = pg_conn.cursor()
+                    pg_cursor.execute(f'SELECT COUNT(*) FROM "{table}" WHERE "{col}" IS NULL')
+                    pg_null_count = pg_cursor.fetchone()[0]
+                    pg_cursor.close()
+                    
+                    if mysql_null_count != pg_null_count:
+                        table_failed = True
+                        failure_reasons.append(f"NULL Count Mismatch on column {col} (MySQL={mysql_null_count}, PG={pg_null_count})")
+                        
+                # Step 4: PostgreSQL sequence validation
+                if table in seq_info:
+                    seq_check = seq_info[table]
+                    if not seq_check["is_correct"]:
+                        table_failed = True
+                        failure_reasons.append(f"Sequence Incorrect (next_value={seq_check['next_value']}, max_id={seq_check['max_id']})")
+                        
+                # Step 5: Optional Sample Validation
+                if sample_enabled and not table_failed and pk_cols:
+                    pk_col = pk_cols[0]
+                    sample_pks_df = pd.read_sql_query(f"SELECT {pk_col} FROM {table} ORDER BY RAND() LIMIT {sample_size}", mysql_engine)
+                    
+                    if not sample_pks_df.empty:
+                        pk_vals = sample_pks_df[pk_col].tolist()
+                        placeholders = ", ".join(["%s"] * len(pk_vals))
+                        
+                        # Fetch rows from MySQL
+                        mysql_samples = pd.read_sql_query(f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})", mysql_engine, params=tuple(pk_vals))
+                        # Fetch rows from PG
+                        pg_samples = pd.read_sql_query(f'SELECT * FROM "{table}" WHERE "{pk_col}" IN ({placeholders})', pg_conn, params=tuple(pk_vals))
+                        
+                        # Align by sorting
+                        mysql_samples = mysql_samples.sort_values(by=pk_col).reset_index(drop=True)
+                        pg_samples = pg_samples.sort_values(by=pk_col).reset_index(drop=True)
+                        
+                        mismatch_found = False
+                        for idx in range(len(mysql_samples)):
+                            mysql_row = mysql_samples.iloc[idx]
+                            pk_val = mysql_row[pk_col]
+                            
+                            pg_row_matches = pg_samples[pg_samples[pk_col] == pk_val]
+                            if pg_row_matches.empty:
+                                mismatch_found = True
+                                failure_reasons.append(f"Sample row with PK={pk_val} not found in Postgres")
+                                break
+                                
+                            pg_row = pg_row_matches.iloc[0]
+                            for col_item in mysql_samples.columns:
+                                m_val = mysql_row[col_item]
+                                p_val = pg_row[col_item]
+                                
+                                if not compare_values(m_val, p_val):
+                                    mismatch_found = True
+                                    failure_reasons.append(f"Sample mismatch on column {col_item} for PK={pk_val} (MySQL={m_val}, PG={p_val})")
+                                    break
+                            if mismatch_found:
+                                break
+                                
+                        if mismatch_found:
+                            table_failed = True
+            except Exception as e:
+                table_failed = True
+                failure_reasons.append(f"Table validation error: {e}")
                         
             status = "FAIL" if table_failed else "PASS"
             reason = "; ".join(failure_reasons) if table_failed else "All checks passed"

@@ -41,7 +41,7 @@ pg_password = st.text_input(
 
 st.divider()
 
-if st.button("Test Connections", use_container_width=True):
+if st.button("Test Connections", width='stretch'):
 
     mysql_ok = False
     pg_ok = False

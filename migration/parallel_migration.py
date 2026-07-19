@@ -400,10 +400,30 @@ class ParallelMigrationManager:
             checkpoint_data = CheckpointManager.load_checkpoint(self.schema_info["migration_order"])
             completed_tables_tracker = {}
             
+            # Verify which tables actually exist in PostgreSQL to avoid skipping completed but missing tables
+            pg_existing_tables = set()
+            try:
+                pg_check_conn = get_postgres_connection()
+                pg_check_cursor = pg_check_conn.cursor()
+                pg_check_cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                pg_existing_tables = {r[0] for r in pg_check_cursor.fetchall()}
+                pg_check_cursor.close()
+                pg_check_conn.close()
+            except Exception as e:
+                logger.warning(f"Could not verify existing tables in PostgreSQL: {e}")
+
             if checkpoint_data:
                 completed_tables_tracker = checkpoint_data.get("completed_tables", {})
-                skipped_tables = [t for t in self.schema_info["migration_order"] if completed_tables_tracker.get(t) == "completed"]
-                remaining_tables = [t for t in self.schema_info["migration_order"] if completed_tables_tracker.get(t) != "completed"]
+                skipped_tables = []
+                remaining_tables = []
+                for t in self.schema_info["migration_order"]:
+                    if completed_tables_tracker.get(t) == "completed" and t in pg_existing_tables:
+                        skipped_tables.append(t)
+                    else:
+                        remaining_tables.append(t)
+                        # Remove from completed if it doesn't actually exist
+                        if completed_tables_tracker.get(t) == "completed":
+                            completed_tables_tracker.pop(t, None)
                 
                 logger.info(f"Skipped Tables: {len(skipped_tables)} {skipped_tables}")
                 logger.info(f"Remaining Tables: {len(remaining_tables)} {remaining_tables}")

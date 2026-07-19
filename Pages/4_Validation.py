@@ -45,7 +45,7 @@ if os.path.exists(report_path):
         st.subheader("Validation Result Details")
         st.dataframe(
             df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
 

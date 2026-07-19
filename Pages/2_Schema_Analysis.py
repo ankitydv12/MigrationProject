@@ -26,7 +26,7 @@ migration_df = pd.DataFrame({
 
 st.dataframe(
     migration_df,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
 
@@ -48,7 +48,7 @@ fk_df = pd.DataFrame(
 
 st.dataframe(
     fk_df,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
 
@@ -65,7 +65,7 @@ uuid_df = pd.DataFrame(
 
 st.dataframe(
     uuid_df,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
 
@@ -88,7 +88,7 @@ json_df = pd.DataFrame(json_rows)
 
 st.dataframe(
     json_df,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
 
@@ -111,6 +111,6 @@ bool_df = pd.DataFrame(bool_rows)
 
 st.dataframe(
     bool_df,
-    use_container_width=True,
+    width='stretch',
     hide_index=True
 )
